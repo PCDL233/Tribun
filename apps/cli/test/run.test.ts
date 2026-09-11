@@ -1,5 +1,27 @@
-import { describe, expect, it } from 'vitest';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { EXIT_CODES } from '@ai-review/shared';
+import { afterAll, describe, expect, it } from 'vitest';
 import { runReview } from '../src/run.js';
+
+function makeTempRepo(): string {
+  const repo = mkdtempSync(join(tmpdir(), 'ai-review-cli-'));
+  const git = (...args: string[]): Buffer =>
+    execFileSync('git', args, { cwd: repo, stdio: 'pipe' });
+  git('init', '--initial-branch', 'main');
+  git('config', 'user.email', 'review@example.com');
+  git('config', 'user.name', 'review');
+  git('config', 'commit.gpgsign', 'false');
+  return repo;
+}
+
+const repos: string[] = [];
+
+afterAll(() => {
+  for (const repo of repos) rmSync(repo, { recursive: true, force: true });
+});
 
 describe('runReview', () => {
   it('fails clearly when the repository path is invalid', async () => {
@@ -11,5 +33,26 @@ describe('runReview', () => {
         json: true,
       }),
     ).rejects.toThrow();
+  });
+
+  it('passes with exit code 0 when nothing is staged', async () => {
+    const repo = makeTempRepo();
+    repos.push(repo);
+    await expect(
+      runReview({ repoPath: repo, mode: 'fast', blockOn: 'BLOCKER', json: true }),
+    ).resolves.toBe(EXIT_CODES.ok);
+  });
+
+  it('blocks on a staged hardcoded secret detected by static analysis', async () => {
+    const repo = makeTempRepo();
+    repos.push(repo);
+    writeFileSync(
+      join(repo, 'config.ts'),
+      "export const awsAccessKey = 'AKIAIOSFODNN7EXAMPLE';\n",
+    );
+    execFileSync('git', ['add', 'config.ts'], { cwd: repo, stdio: 'pipe' });
+    await expect(
+      runReview({ repoPath: repo, mode: 'fast', blockOn: 'BLOCKER', json: true }),
+    ).resolves.toBe(EXIT_CODES.blocked);
   });
 });

@@ -1,22 +1,12 @@
 {
-  "name": "@ai-review/cli",
+  "name": "@ai-review/tools",
   "version": "1.0.0",
   "private": true,
   "type": "module",
-  "bin": { "ai-review": "./dist/index.js" },
   "exports": { ".": { "types": "./dist/index.d.ts", "default": "./dist/index.js" } },
   "files": ["dist"],
   "scripts": { "build": "tsc -p .", "typecheck": "tsc -p . --noEmit", "test": "vitest run" },
-  "dependencies": {
-    "@ai-review/agents": "workspace:*",
-    "@ai-review/core": "workspace:*",
-    "@ai-review/diff": "workspace:*",
-    "@ai-review/llm": "workspace:*",
-    "@ai-review/report": "workspace:*",
-    "@ai-review/shared": "workspace:*",
-    "@ai-review/tools": "workspace:*",
-    "commander": "catalog:"
-  },
+  "dependencies": { "@ai-review/shared": "workspace:*", "ts-morph": "catalog:" },
   "devDependencies": {
     "@ai-review/tsconfig": "workspace:*",
     "@types/node": "catalog:",

@@ -1,9 +1,11 @@
-import { ReviewAgent } from '@ai-review/agents';
-import { DiffContextBuilder, GitReader, createGitRunner, createIgnoreRules } from '@ai-review/diff';
+import { runReviewPipeline, getMaxRiskScore } from '@ai-review/core';
+import type { PipelineDeps } from '@ai-review/core';
+import { GitReader, createGitRunner, createIgnoreRules } from '@ai-review/diff';
 import { createMockProvider } from '@ai-review/llm';
 import { renderJson, renderMarkdown } from '@ai-review/report';
 import { EXIT_CODES, severityMeetsThreshold } from '@ai-review/shared';
 import type { ExitCode, ReviewReport, Severity } from '@ai-review/shared';
+import { buildDefaultRegistry } from '@ai-review/tools';
 
 export type RunReviewOptions = {
   repoPath: string;
@@ -13,40 +15,50 @@ export type RunReviewOptions = {
 };
 
 /**
- * 执行一次离线 staged 审查。
+ * 经 LangGraph 流水线执行一次离线 staged 审查（parse → riskPlan → 并行审查 → validate → report）。
  * @param options CLI 审查选项
- * @returns 稳定退出码
+ * @returns 稳定退出码（0 通过 / 1 阻断）
  */
 export async function runReview(options: RunReviewOptions): Promise<ExitCode> {
   const startedAt = Date.now();
   const gitReader = new GitReader(createGitRunner(options.repoPath));
-  const emptyRag = { query: async (): Promise<[]> => [] };
-  const context = await new DiffContextBuilder(gitReader, emptyRag, createIgnoreRules([])).build();
-  const findings = await new ReviewAgent(createMockProvider()).review(context);
+  const mock = createMockProvider();
+  const deps: PipelineDeps = {
+    gitReader,
+    rag: { query: async () => [] },
+    ignores: createIgnoreRules([]),
+    history: { changeFrequency: async () => 0 },
+    providers: { correctness: mock, security: mock, performance: mock },
+    registry: buildDefaultRegistry(),
+    mode: options.mode,
+  };
+
+  const state = await runReviewPipeline(deps, { reviewId: `review-${startedAt}` });
+  const blocking = state.findings.some((finding) =>
+    severityMeetsThreshold(finding.severity, options.blockOn),
+  );
+
   const report: ReviewReport = {
     meta: {
       reviewId: `review-${startedAt}`,
       repoPath: options.repoPath,
       branch: (await gitReader.readBranch()).trim() || 'HEAD',
-      model: 'mock',
+      model: 'mock + 静态分析',
       mode: options.mode,
-      riskScore: findings.length === 0 ? 0 : 50,
-      durationMs: Date.now() - startedAt,
-      tokenUsed: 0,
+      riskScore: getMaxRiskScore(state.plan),
+      durationMs: state.metrics.durationMs,
+      tokenUsed: state.metrics.totalTokens,
     },
-    summary: `Reviewed ${context.metadata.totalFiles} staged file(s).`,
-    findings,
+    summary: `Reviewed ${state.context.metadata.totalFiles} staged file(s).`,
+    findings: state.findings,
     qualityNotes: [],
     suggestions: [],
-    assessment: findings.some((finding) =>
-      severityMeetsThreshold(finding.severity, options.blockOn),
-    )
+    assessment: blocking
       ? 'Changes should not be committed until blocking findings are addressed.'
       : 'No findings reached the configured blocking threshold.',
-    degradedToStatic: [],
+    degradedToStatic: state.metrics.degradedToStatic,
   };
+
   process.stdout.write(`${options.json ? renderJson(report) : renderMarkdown(report)}\n`);
-  return findings.some((finding) => severityMeetsThreshold(finding.severity, options.blockOn))
-    ? EXIT_CODES.blocked
-    : EXIT_CODES.ok;
+  return blocking ? EXIT_CODES.blocked : EXIT_CODES.ok;
 }
