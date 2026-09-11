@@ -1,0 +1,27 @@
+{
+  "name": "@ai-review/web",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@ai-review/shared": "workspace:*",
+    "@tanstack/react-query": "catalog:",
+    "antd": "catalog:",
+    "react": "catalog:",
+    "zod": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "oxc-transform-react": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

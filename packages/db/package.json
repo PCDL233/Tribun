@@ -1,5 +1,5 @@
 {
-  "name": "@ai-review/shared",
+  "name": "@ai-review/db",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -7,10 +7,6 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./api": {
-      "types": "./dist/api.d.ts",
-      "default": "./dist/api.js"
     }
   },
   "files": [
@@ -22,11 +18,14 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "yaml": "catalog:",
+    "@ai-review/shared": "workspace:*",
+    "better-sqlite3": "catalog:",
+    "drizzle-orm": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {
     "@ai-review/tsconfig": "workspace:*",
+    "@types/better-sqlite3": "catalog:",
     "@types/node": "catalog:",
     "typescript": "catalog:",
     "vitest": "catalog:"

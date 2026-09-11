@@ -1,21 +1,21 @@
 packages:
-  - "apps/*"
-  - "packages/*"
-  - "tooling/*"
+  - 'apps/*'
+  - 'packages/*'
+  - 'tooling/*'
 
 # 依赖版本集中管理：所有第三方依赖只在此声明，各包以 catalog: 协议引用
 catalog:
   typescript: ^6.0.3
-  "@types/node": ^22.20.2
+  '@types/node': ^22.20.2
   zod: ^4.6.2
   # AI SDK 5 线（ai@5 搭配 provider@2）
   ai: ^5.0.255
-  "@ai-sdk/anthropic": ^2.0.102
-  "@ai-sdk/openai": ^2.0.127
+  '@ai-sdk/anthropic': ^2.0.102
+  '@ai-sdk/openai': ^2.0.127
   # LangGraph.js 1.x（@langchain/core 为其 peer 依赖，需显式安装）
-  "@langchain/langgraph": ^1.4.14
-  "@langchain/core": ^1.2.10
-  "@modelcontextprotocol/sdk": ^1.30.0
+  '@langchain/langgraph': ^1.4.14
+  '@langchain/core': ^1.2.10
+  '@modelcontextprotocol/sdk': ^1.30.0
   parse-git-diff: ^0.0.20
   ts-morph: ^28.0.0
   minisearch: ^7.2.0
@@ -24,7 +24,23 @@ catalog:
   picomatch: ^4.0.7
   yaml: ^2.9.0
   commander: ^15.0.0
-  "@clack/prompts": ^1.8.0
+  '@clack/prompts': ^1.8.0
+  # —— Phase 3 团队版：Hono API + SSE / Drizzle SQLite / React 19 Dashboard ——
+  hono: ^4.13.7
+  '@hono/zod-validator': ^0.9.1
+  '@hono/node-server': ^2.1.1
+  drizzle-orm: ^0.45.2
+  better-sqlite3: ^13.0.3
+  '@types/better-sqlite3': ^9.6.0
+  react: ^19.3.0
+  react-dom: ^19.3.0
+  '@types/react': ^19.3.0
+  '@types/react-dom': ^19.3.0
+  vite: ^8.3.0
+  '@vitejs/plugin-react': ^6.1.1
+  '@tanstack/react-query': ^5.102.8
+  antd: ^6.6.3
+  oxc-transform-react: ^0.149.0
   # 工具链
   vitest: ^5.0.0
   turbo: ^2.10.12
@@ -35,3 +51,5 @@ catalog:
 
 onlyBuiltDependencies:
   - turbo
+  # better-sqlite3 是原生模块，pnpm 10 默认拒绝其 postinstall 编译脚本
+  - better-sqlite3

@@ -1,5 +1,5 @@
 {
-  "name": "@ai-review/shared",
+  "name": "@ai-review/server",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -7,22 +7,25 @@
     ".": {
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
-    },
-    "./api": {
-      "types": "./dist/api.d.ts",
-      "default": "./dist/api.js"
     }
   },
-  "files": [
-    "dist"
-  ],
   "scripts": {
+    "dev": "node --watch dist/main.js",
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
     "test": "vitest run"
   },
   "dependencies": {
-    "yaml": "catalog:",
+    "@ai-review/core": "workspace:*",
+    "@ai-review/db": "workspace:*",
+    "@ai-review/diff": "workspace:*",
+    "@ai-review/llm": "workspace:*",
+    "@ai-review/report": "workspace:*",
+    "@ai-review/shared": "workspace:*",
+    "@ai-review/tools": "workspace:*",
+    "@hono/node-server": "catalog:",
+    "@hono/zod-validator": "catalog:",
+    "hono": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

@@ -1,0 +1,10 @@
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+
+export default defineConfig({
+  // React Compiler 自动 memoization（方案 3.10：全仓禁手写 useMemo/useCallback）；
+  // plugin-react 6 为 oxc 内核，经 compiler 选项启用（需 oxc-transform-react）
+  plugins: [react({ compiler: true })],
+  // dev 期 API 转发到 Hono；生产由 Hono 同源托管静态产物，无需代理
+  server: { proxy: { '/api': 'http://localhost:8080' } },
+});
