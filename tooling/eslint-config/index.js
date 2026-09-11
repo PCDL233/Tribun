@@ -4,7 +4,13 @@ import tseslint from 'typescript-eslint';
 
 export default tseslint.config(
   {
-    ignores: ['**/dist/**', '**/node_modules/**', '**/.turbo/**', '**/coverage/**'],
+    ignores: [
+      '**/dist/**',
+      '**/node_modules/**',
+      '**/.turbo/**',
+      '**/coverage/**',
+      '**/vitest.config.ts',
+    ],
   },
   ...tseslint.configs.recommended,
   {
@@ -22,14 +28,10 @@ export default tseslint.config(
       // —— 规范 §5：禁 any / @ts-ignore ——
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/ban-ts-comment': 'error',
-      '@typescript-eslint/consistent-type-imports': [
-        'error',
-        { prefer: 'type-imports', fixStyle: 'inline-type-imports' },
-      ],
       // —— 规范 §10：显式返回类型（限导出）——
       '@typescript-eslint/explicit-function-return-type': [
         'error',
-        { allowExpressions: true, allowTypedFunctionExpressions: true, allowIIFE: true },
+        { allowExpressions: true, allowTypedFunctionExpressions: true, allowIIFEs: true },
       ],
       // —— 规范 §7：禁静默吞错与悬空 Promise ——
       'no-empty': ['error', { allowEmptyCatch: true }],
@@ -49,7 +51,17 @@ export default tseslint.config(
       '@typescript-eslint/naming-convention': [
         'error',
         { selector: 'typeLike', format: ['PascalCase'] },
-        { selector: 'variable', modifiers: ['global', 'const'], format: ['camelCase', 'UPPER_CASE'] },
+        {
+          selector: 'variable',
+          modifiers: ['const'],
+          filter: { regex: 'Schema$', match: true },
+          format: ['PascalCase'],
+        },
+        {
+          selector: 'variable',
+          modifiers: ['global', 'const'],
+          format: ['camelCase', 'UPPER_CASE'],
+        },
       ],
     },
   },

@@ -2,7 +2,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { ConfigError, loadConfig, resolveEnvRefs } from '../src/config';
+import { ConfigError, loadConfig, resolveEnvRefs } from '../src/index';
 
 describe('resolveEnvRefs', () => {
   it('resolves nested env references', () => {
