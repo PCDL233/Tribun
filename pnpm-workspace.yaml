@@ -1,0 +1,37 @@
+packages:
+  - "apps/*"
+  - "packages/*"
+  - "tooling/*"
+
+# 依赖版本集中管理：所有第三方依赖只在此声明，各包以 catalog: 协议引用
+catalog:
+  typescript: ^6.0.3
+  "@types/node": ^22.20.2
+  zod: ^4.6.2
+  # AI SDK 5 线（ai@5 搭配 provider@2）
+  ai: ^5.0.255
+  "@ai-sdk/anthropic": ^2.0.102
+  "@ai-sdk/openai": ^2.0.127
+  # LangGraph.js 1.x（@langchain/core 为其 peer 依赖，需显式安装）
+  "@langchain/langgraph": ^1.4.14
+  "@langchain/core": ^1.2.10
+  "@modelcontextprotocol/sdk": ^1.30.0
+  parse-git-diff: ^0.0.20
+  ts-morph: ^28.0.0
+  minisearch: ^7.2.0
+  p-map: ^7.0.7
+  p-limit: ^7.3.2
+  picomatch: ^4.0.7
+  yaml: ^2.9.0
+  commander: ^15.0.0
+  "@clack/prompts": ^1.8.0
+  # 工具链
+  vitest: ^5.0.0
+  turbo: ^2.10.12
+  prettier: ^3.9.6
+  eslint: ^10.10.0
+  typescript-eslint: ^8.70.0
+  eslint-plugin-import-x: ^4.6.0
+
+onlyBuiltDependencies:
+  - turbo
