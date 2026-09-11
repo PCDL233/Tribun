@@ -5,14 +5,11 @@
     "lib": ["ES2023"],
     "module": "NodeNext",
     "moduleResolution": "NodeNext",
-    "outDir": "dist",
-    "rootDir": "src",
     "declaration": true,
     "declarationMap": true,
     "sourceMap": true,
     "composite": false,
     "incremental": true,
-    "tsBuildInfoFile": "tsconfig.tsbuildinfo",
     "strict": true,
     "noUncheckedIndexedAccess": true,
     "exactOptionalPropertyTypes": true,
@@ -25,6 +22,7 @@
     "esModuleInterop": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
+    "types": ["node"],
     "skipLibCheck": true
   }
 }
