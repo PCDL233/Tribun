@@ -41,6 +41,10 @@ catalog:
   '@tanstack/react-query': ^5.102.8
   antd: ^6.6.3
   oxc-transform-react: ^0.149.0
+  # 统计分析图表（方案 3.10 页面 4，echarts/core 按需注册控制体积）
+  echarts: ^6.0.0
+  # Prometheus 指标暴露（方案 Phase 3：审查耗时/token 消耗/检出率）
+  prom-client: ^15.1.3
   # 工具链
   vitest: ^5.0.0
   turbo: ^2.10.12

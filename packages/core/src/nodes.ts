@@ -28,6 +28,8 @@ export type PipelineDeps = {
   providers: Record<LlmDimension, ReviewProvider>;
   registry: ToolRegistry;
   mode: 'fast' | 'full';
+  /** CI 区间审查基线（方案 3.11 `run --base <ref>`）；undefined 表示默认暂存区审查 */
+  base?: string | undefined;
   /** token 硬预算；预算耗尽时低优先级文件降级为 staticOnly（方案 3.3） */
   budget?: TokenBudget | undefined;
 };
@@ -44,9 +46,9 @@ function selectFiles(context: CodeContext, paths: ReadonlySet<string>): CodeCont
   return { files, metadata: { ...context.metadata, totalFiles: files.length } };
 }
 
-/** 读取暂存区 diff 并构建上下文包（方案 3.1） */
+/** 读取 diff（暂存区或 base...HEAD 区间）并构建上下文包（方案 3.1） */
 export function makeParseNode(deps: PipelineDeps): PipelineNode {
-  const builder = new DiffContextBuilder(deps.gitReader, deps.rag, deps.ignores);
+  const builder = new DiffContextBuilder(deps.gitReader, deps.rag, deps.ignores, 50, deps.base);
   return async (state) => {
     void state;
     return { context: await builder.build() };

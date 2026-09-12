@@ -55,4 +55,32 @@ describe('runReview', () => {
       runReview({ repoPath: repo, mode: 'fast', blockOn: 'BLOCKER', json: true }),
     ).resolves.toBe(EXIT_CODES.blocked);
   });
+
+  it('reviews the base...HEAD committed range in CI mode (--base)', async () => {
+    const repo = makeTempRepo();
+    repos.push(repo);
+    const git = (...args: string[]): Buffer =>
+      execFileSync('git', args, { cwd: repo, stdio: 'pipe' });
+
+    // 干净基线提交；secret 落在其后的 HEAD 提交里，且工作区保持干净（非 staged 路径）
+    writeFileSync(join(repo, 'README.md'), '# demo\n');
+    git('add', 'README.md');
+    git('commit', '-m', 'baseline', '--no-verify');
+    writeFileSync(
+      join(repo, 'config.ts'),
+      "export const awsAccessKey = 'AKIAIOSFODNN7EXAMPLE';\n",
+    );
+    git('add', 'config.ts');
+    git('commit', '-m', 'add secret', '--no-verify');
+
+    await expect(
+      runReview({
+        repoPath: repo,
+        mode: 'fast',
+        blockOn: 'BLOCKER',
+        json: true,
+        base: 'HEAD~1',
+      }),
+    ).resolves.toBe(EXIT_CODES.blocked);
+  });
 });

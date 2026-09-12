@@ -6,9 +6,11 @@ import { serveStatic } from '@hono/node-server/serve-static';
 import { createReviewStore } from '@ai-review/db';
 import { createGitRunner, createIgnoreRules, GitReader } from '@ai-review/diff';
 import { createMockProvider } from '@ai-review/llm';
+import { runReviewPipeline } from '@ai-review/core';
 import type { PipelineDeps } from '@ai-review/core';
 import { buildDefaultRegistry } from '@ai-review/tools';
 import { buildApp } from './app.js';
+import { createReviewMetrics } from './metrics.js';
 import { ReviewService } from './review-service.js';
 
 export type ServerCliOptions = {
@@ -51,8 +53,9 @@ function createMockDeps(repoPath: string, mode: 'fast' | 'full'): PipelineDeps {
 
 export async function startServer(options: ServerCliOptions): Promise<void> {
   const store = createReviewStore(options.dbFile);
-  const service = new ReviewService(store, createMockDeps);
-  const app = buildApp({ store, service });
+  const metrics = createReviewMetrics();
+  const service = new ReviewService(store, createMockDeps, runReviewPipeline, metrics);
+  const app = buildApp({ store, service, metrics });
 
   if (options.webDistDir !== undefined && existsSync(options.webDistDir)) {
     // Hono 同时托管 Dashboard 静态产物（方案 3.10：单容器提供 API + 前端）

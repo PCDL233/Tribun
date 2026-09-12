@@ -4,8 +4,9 @@ import { Layout, Tabs, Typography } from 'antd';
 import { ReportDetailView } from './views/ReportDetailView';
 import { ReviewListView } from './views/ReviewListView';
 import { RunReviewView } from './views/RunReviewView';
+import { StatisticsView } from './views/StatisticsView';
 
-/** AI Code Review Dashboard（方案 3.10）：审查历史 / 报告详情 / 发起审查 */
+/** AI Code Review Dashboard（方案 3.10）：审查历史 / 报告详情 / 发起审查 / 统计分析 */
 export default function App(): ReactElement {
   const [selectedReviewId, setSelectedReviewId] = useState<string | undefined>(undefined);
 
@@ -44,6 +45,11 @@ export default function App(): ReactElement {
                   onCompleted={(reviewId) => setSelectedReviewId(reviewId || undefined)}
                 />
               ),
+            },
+            {
+              key: 'stats',
+              label: '统计分析',
+              children: <StatisticsView />,
             },
           ]}
         />

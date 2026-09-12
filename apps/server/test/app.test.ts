@@ -6,6 +6,7 @@ import { createMockProvider } from '@ai-review/llm';
 import { buildDefaultRegistry } from '@ai-review/tools';
 import type { Finding } from '@ai-review/shared';
 import { buildApp } from '../src/app.js';
+import { createReviewMetrics } from '../src/metrics.js';
 import { ReviewService } from '../src/review-service.js';
 
 function makeDeps(mode: 'fast' | 'full'): PipelineDeps {
@@ -72,8 +73,9 @@ function makeGatedRunner(gate: { promise: Promise<void>; resolve: () => void }):
 
 function makeHarness(runner: PipelineRunner): ReturnType<typeof buildApp> {
   const store: ReviewStore = createReviewStore(':memory:');
-  const service = new ReviewService(store, makeDeps, runner);
-  return buildApp({ store, service });
+  const metrics = createReviewMetrics();
+  const service = new ReviewService(store, makeDeps, runner, metrics);
+  return buildApp({ store, service, metrics });
 }
 
 const gates: Array<{ promise: Promise<void>; resolve: () => void }> = [];
@@ -181,6 +183,48 @@ describe('false-positive marking API', () => {
         })
       ).status,
     ).toBe(400);
+  });
+});
+
+describe('stats and metrics endpoints', () => {
+  it('aggregates store statistics after a completed review', async () => {
+    const app = makeHarness(async () => makeState());
+    await app.request('/api/reviews', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ repoPath: 'D:/tmp/repo' }),
+    });
+
+    await vi.waitFor(async () => {
+      const response = await app.request('/api/stats');
+      const { stats } = (await response.json()) as {
+        stats: { totalReviews: number; totalFindings: number; severityDistribution: Array<{ severity: string; count: number }> };
+      };
+      expect(stats.totalReviews).toBe(1);
+      expect(stats.totalFindings).toBe(1);
+      expect(stats.severityDistribution).toEqual([
+        { severity: 'BLOCKER', count: 1 },
+        { severity: 'WARNING', count: 0 },
+        { severity: 'NIT', count: 0 },
+        { severity: 'PRAISE', count: 0 },
+      ]);
+    });
+  });
+
+  it('serves prometheus metrics after completion and failure', async () => {
+    const app = makeHarness(async () => {
+      throw new Error('pipeline boom');
+    });
+    await app.request('/api/reviews', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ repoPath: 'D:/tmp/repo' }),
+    });
+
+    await vi.waitFor(async () => {
+      const body = await (await app.request('/metrics')).text();
+      expect(body).toContain('ai_review_reviews_total{status="failed"} 1');
+    });
   });
 });
 

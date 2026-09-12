@@ -7,4 +7,15 @@ export default defineConfig({
   plugins: [react({ compiler: true })],
   // dev 期 API 转发到 Hono；生产由 Hono 同源托管静态产物，无需代理
   server: { proxy: { '/api': 'http://localhost:8080' } },
+  build: {
+    rollupOptions: {
+      output: {
+        // Vite 8（Rolldown 内核）以 advancedChunks 取代 manualChunks 对象形式：
+        // echarts 按需注册后仍较重，独立 chunk 利于浏览器缓存
+        advancedChunks: {
+          groups: [{ name: 'echarts', test: /node_modules[\/]echarts[\/]/ }],
+        },
+      },
+    },
+  },
 });

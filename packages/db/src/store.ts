@@ -11,6 +11,8 @@ import type {
   ReviewListItem,
   ReviewReport,
   ReviewReportDetail,
+  ReviewStats,
+  SeverityCount,
 } from '@ai-review/shared';
 import { findings, reviews } from './schema.js';
 
@@ -254,6 +256,84 @@ export class ReviewStore {
       .where(eq(findings.id, findingId))
       .run();
     return result.changes > 0;
+  }
+
+  /**
+   * 统计聚合（Dashboard 统计分析页的数据源，方案 3.10 页面 4）。
+   * 数据量为单机审查历史量级（数千行），全表读出后在 JS 侧聚合，
+   * 避免 SQLite 字符串日期聚合的方言耦合。
+   */
+  public getStats(): ReviewStats {
+    const reviewRows = this.db.select().from(reviews).all();
+    const findingRows = this.db
+      .select({
+        filePath: findings.filePath,
+        severity: findings.severity,
+        isFalsePositive: findings.isFalsePositive,
+      })
+      .from(findings)
+      .all();
+
+    const severityCounts = new Map<string, number>();
+    const fileCounts = new Map<string, { findingCount: number; blockerCount: number }>();
+    let falsePositiveCount = 0;
+    for (const row of findingRows) {
+      // is_false_positive 列为 drizzle boolean 模式，读回即 true/false
+      if (row.isFalsePositive) falsePositiveCount += 1;
+      severityCounts.set(row.severity, (severityCounts.get(row.severity) ?? 0) + 1);
+      const file = fileCounts.get(row.filePath) ?? { findingCount: 0, blockerCount: 0 };
+      file.findingCount += 1;
+      if (row.severity === 'BLOCKER') file.blockerCount += 1;
+      fileCounts.set(row.filePath, file);
+    }
+
+    // 字面量元组标注：避免数组字面量拓宽为 string 后无法满足 SeverityCount
+    const severityLiterals = ['BLOCKER', 'WARNING', 'NIT', 'PRAISE'] as const;
+    const severityDistribution: SeverityCount[] = severityLiterals.map((severity) => ({
+      severity,
+      count: severityCounts.get(severity) ?? 0,
+    }));
+
+    // 风险分趋势按自然日聚合（created_at 为 ISO 字符串，前 10 位即日期）
+    const dayBuckets = new Map<string, { riskScoreSum: number; reviews: number }>();
+    for (const row of reviewRows) {
+      const date = row.createdAt.slice(0, 10);
+      const bucket = dayBuckets.get(date) ?? { riskScoreSum: 0, reviews: 0 };
+      bucket.riskScoreSum += row.riskScore;
+      bucket.reviews += 1;
+      dayBuckets.set(date, bucket);
+    }
+    const riskTrend = [...dayBuckets.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, bucket]) => ({
+        date,
+        reviews: bucket.reviews,
+        avgRiskScore: bucket.riskScoreSum / bucket.reviews,
+      }));
+
+    const totalReviews = reviewRows.length;
+    const avgRiskScore =
+      totalReviews === 0
+        ? 0
+        : reviewRows.reduce((sum, row) => sum + row.riskScore, 0) / totalReviews;
+
+    return {
+      totalReviews,
+      totalFindings: findingRows.length,
+      falsePositiveCount,
+      avgRiskScore,
+      avgDurationMs:
+        totalReviews === 0
+          ? 0
+          : reviewRows.reduce((sum, row) => sum + row.durationMs, 0) / totalReviews,
+      totalTokenUsed: reviewRows.reduce((sum, row) => sum + row.tokenUsed, 0),
+      severityDistribution,
+      riskTrend,
+      topRiskyFiles: [...fileCounts.entries()]
+        .map(([filePath, file]) => ({ filePath, ...file }))
+        .sort((a, b) => b.findingCount - a.findingCount)
+        .slice(0, 10),
+    };
   }
 
   /** 关闭底层连接（进程退出 / 测试清理） */

@@ -1,0 +1,26 @@
+# 全仓质量门禁（规范 §1.2：lint → typecheck → test 全绿方可合入）
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 读取根 package.json 的 packageManager 字段自动安装 pnpm 10
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      # Turborepo 按依赖图调度：packages → apps；CI 中自带远端缓存挂载点
+      - run: pnpm turbo lint typecheck build test

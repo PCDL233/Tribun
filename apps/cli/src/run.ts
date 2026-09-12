@@ -12,6 +12,8 @@ export type RunReviewOptions = {
   mode: 'fast' | 'full';
   blockOn: Severity;
   json: boolean;
+  /** CI 区间审查基线（方案 3.11）；undefined 表示审查暂存区 */
+  base?: string;
 };
 
 /**
@@ -32,6 +34,8 @@ export async function runReview(options: RunReviewOptions): Promise<ExitCode> {
     registry: buildDefaultRegistry(),
     mode: options.mode,
   };
+
+  if (options.base !== undefined) deps.base = options.base;
 
   const state = await runReviewPipeline(deps, { reviewId: `review-${startedAt}` });
   const blocking = state.findings.some((finding) =>

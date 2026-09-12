@@ -1,0 +1,12 @@
+# 单机团队版拓扑：review-server 内嵌 SQLite（Volume 持久化），单容器提供 API + Dashboard。
+# 方案 7.2 的 PostgreSQL/Redis 仅在切换团队版多机部署时追加（db 包预留双方言迁移路径）。
+services:
+  review-server:
+    build: .
+    ports:
+      - "8080:8080" # API + Web Dashboard（同一端口）
+    volumes:
+      - review-data:/app/.ai-review-cache
+
+volumes:
+  review-data:

@@ -2,9 +2,10 @@ import {
   FalsePositiveResponseSchema,
   ReviewListResponseSchema,
   ReviewReportDetailSchema,
+  ReviewStatsResponseSchema,
   StartReviewResponseSchema,
 } from '@ai-review/shared/api';
-import type { ReviewListItem, ReviewReportDetail } from '@ai-review/shared/api';
+import type { ReviewListItem, ReviewReportDetail, ReviewStats } from '@ai-review/shared/api';
 import { parseResponse } from './parse-response.js';
 
 const API_BASE = '/api';
@@ -45,4 +46,10 @@ export async function markFalsePositive(
     body: JSON.stringify({ isFalsePositive }),
   });
   await parseResponse(FalsePositiveResponseSchema, response);
+}
+
+/** 查询统计聚合（方案 3.10 页面 4：风险趋势 / 严重度分布 / Top 高风险文件） */
+export async function fetchStats(): Promise<ReviewStats> {
+  const body = await parseResponse(ReviewStatsResponseSchema, await fetch(`${API_BASE}/stats`));
+  return body.stats;
 }

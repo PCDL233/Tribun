@@ -64,3 +64,47 @@ export const StartReviewResponseSchema = z.object({ reviewId: z.string() });
 export const ReviewListResponseSchema = z.object({ reviews: z.array(ReviewListItemSchema) });
 /** PATCH /api/findings/:id → 200 */
 export const FalsePositiveResponseSchema = z.object({ updated: z.boolean() });
+
+/** —— 统计分析（方案 3.10 页面 4：ECharts 数据源，全部由 db 聚合产出）—— */
+
+/** 严重度维度的发现计数（含 PRAISE，与 Finding 契约的严重度字面量一致） */
+export const SeverityCountSchema = z.object({
+  severity: z.enum(['BLOCKER', 'WARNING', 'NIT', 'PRAISE']),
+  count: z.number().int().nonnegative(),
+});
+export type SeverityCount = z.infer<typeof SeverityCountSchema>;
+
+/** 按自然日聚合的风险分趋势点（createdAt 截取日期部分） */
+export const RiskTrendPointSchema = z.object({
+  date: z.string(),
+  reviews: z.number().int().nonnegative(),
+  avgRiskScore: z.number(),
+});
+export type RiskTrendPoint = z.infer<typeof RiskTrendPointSchema>;
+
+/** 发现数最多的文件（Top 高风险文件榜，按发现数降序） */
+export const RiskyFileSchema = z.object({
+  filePath: z.string(),
+  findingCount: z.number().int().nonnegative(),
+  blockerCount: z.number().int().nonnegative(),
+});
+export type RiskyFile = z.infer<typeof RiskyFileSchema>;
+
+/** GET /api/stats 响应体（空库时所有计数为 0、均值与趋势为空数组） */
+export const ReviewStatsSchema = z.object({
+  totalReviews: z.number().int().nonnegative(),
+  totalFindings: z.number().int().nonnegative(),
+  falsePositiveCount: z.number().int().nonnegative(),
+  avgRiskScore: z.number().nonnegative(),
+  /** 全部审查的平均耗时（毫秒） */
+  avgDurationMs: z.number().nonnegative(),
+  totalTokenUsed: z.number().int().nonnegative(),
+  severityDistribution: z.array(SeverityCountSchema),
+  /** 按日期升序的风险分趋势 */
+  riskTrend: z.array(RiskTrendPointSchema),
+  topRiskyFiles: z.array(RiskyFileSchema),
+});
+export type ReviewStats = z.infer<typeof ReviewStatsSchema>;
+
+/** GET /api/stats */
+export const ReviewStatsResponseSchema = z.object({ stats: ReviewStatsSchema });

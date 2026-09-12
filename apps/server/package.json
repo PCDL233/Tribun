@@ -26,6 +26,7 @@
     "@hono/node-server": "catalog:",
     "@hono/zod-validator": "catalog:",
     "hono": "catalog:",
+    "prom-client": "catalog:",
     "zod": "catalog:"
   },
   "devDependencies": {

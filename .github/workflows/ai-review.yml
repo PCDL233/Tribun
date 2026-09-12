@@ -1,0 +1,85 @@
+# PR 自动审查（方案 7.3）：full 模式审查 base...HEAD 区间，结果以 PR 评论回帖
+name: AI Code Review
+
+on:
+  pull_request:
+    types: [opened, synchronize]
+
+jobs:
+  review:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # --base 区间 diff 需要 base 引用的完整历史
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm turbo build --filter=@ai-review/cli...
+
+      - name: Run AI Review
+        id: review
+        env:
+          AI_REVIEW_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          mkdir -p .ai-review-reports
+          set +e
+          pnpm exec ai-review run \
+            --base "origin/${{ github.base_ref }}" \
+            --mode full --block-on BLOCKER --json \
+            > .ai-review-reports/latest.json
+          # 退出码 1 表示存在阻断发现，属预期结果而非工作流失败
+          echo "exit_code=$?" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Post Review Comment
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('node:fs');
+            const report = JSON.parse(
+              fs.readFileSync('.ai-review-reports/latest.json', 'utf8'),
+            );
+            const blockers = report.findings.filter(
+              (f) => f.severity === 'BLOCKER',
+            ).length;
+            const rows = report.findings.length === 0
+              ? '| - | - | 无发现 | - |'
+              : report.findings
+                  .map((f) =>
+                    [
+                      f.severity,
+                      `${f.filePath}:${f.lineStart}`,
+                      f.title,
+                      `${Math.round((f.confidence ?? 0) * 100)}%`,
+                    ].join(' | '),
+                  )
+                  .map((row) => `| ${row} |`)
+                  .join('\n');
+            const body = [
+              '## AI Code Review 报告',
+              `- 风险评分：${report.meta.riskScore}/100`,
+              `- BLOCKER 数量：${blockers}`,
+              '',
+              '| 严重度 | 位置 | 问题 | 置信度 |',
+              '|--------|------|------|--------|',
+              rows,
+              '',
+              report.assessment,
+            ].join('\n');
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              body,
+            });

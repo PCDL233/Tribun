@@ -3,6 +3,7 @@ import type { PipelineDeps, PipelineNodeName, ReviewState } from '@ai-review/cor
 import type { ReviewStore } from '@ai-review/db';
 import { severityMeetsThreshold } from '@ai-review/shared';
 import type { ReviewReport, ReviewStageEvent, Severity } from '@ai-review/shared';
+import type { ReviewMetrics } from './metrics.js';
 
 // SSE 事件契约以 shared 为单一事实源，此处转出口供既有调用方使用
 export type { ReviewStageEvent } from '@ai-review/shared';
@@ -49,6 +50,7 @@ export class ReviewService {
     private readonly store: ReviewStore,
     private readonly depsFactory: PipelineDepsFactory,
     private readonly runner: PipelineRunner = runReviewPipeline,
+    private readonly metrics?: ReviewMetrics,
   ) {}
 
   /**
@@ -96,6 +98,7 @@ export class ReviewService {
       });
       const report = await this.buildReport(reviewId, options, deps, state);
       this.store.saveReport(report);
+      this.metrics?.recordCompleted(report);
       const blockerCount = report.findings.filter(
         (finding) => finding.severity === 'BLOCKER' && !finding.isFalsePositive,
       ).length;
@@ -109,6 +112,7 @@ export class ReviewService {
         ),
       });
     } catch (e) {
+      this.metrics?.recordFailed();
       this.emit({
         type: 'failed',
         reviewId,

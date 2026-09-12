@@ -4,6 +4,7 @@ import { zValidator } from '@hono/zod-validator';
 import { z } from 'zod';
 import type { ReviewStore } from '@ai-review/db';
 import { StoreError } from '@ai-review/db';
+import type { ReviewMetrics } from './metrics.js';
 import type { ReviewStageEvent } from './review-service.js';
 import type { ReviewService } from './review-service.js';
 
@@ -19,6 +20,7 @@ export const FalsePositiveSchema = z.object({ isFalsePositive: z.boolean() });
 export type AppDeps = {
   store: ReviewStore;
   service: ReviewService;
+  metrics: ReviewMetrics;
 };
 
 /** SSE 桥接队列：ReviewService 的同步广播 → streamSSE 的异步消费 */
@@ -53,6 +55,8 @@ class EventQueue<T> {
  * - GET  /api/reviews/:id      报告详情（五段式 + 行级 findings）
  * - GET  /api/reviews/:id/events  实时进度 SSE
  * - PATCH /api/findings/:id    误报标记回写
+ * - GET  /api/stats            统计聚合（Dashboard 统计分析页）
+ * - GET  /metrics              Prometheus 指标（Phase 3 可观测性）
  */
 export function buildApp(deps: AppDeps): Hono {
   const app = new Hono();
@@ -63,6 +67,13 @@ export function buildApp(deps: AppDeps): Hono {
   });
 
   app.get('/api/reviews', (c) => c.json({ reviews: deps.store.listReviews() }));
+
+  app.get('/api/stats', (c) => c.json({ stats: deps.store.getStats() }));
+
+  // Prometheus 拉取端点：文本格式由 prom-client 渲染，不经 zod（非 JSON 契约）
+  app.get('/metrics', async (c) =>
+    c.text(await deps.metrics.render(), 200, { 'content-type': 'text/plain; version=0.0.4' }),
+  );
 
   app.get('/api/reviews/:id', (c) => {
     try {

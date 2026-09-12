@@ -100,6 +100,66 @@ describe('ReviewStore', () => {
     }
   });
 
+  it('returns zeroed statistics for an empty store', () => {
+    const store = new ReviewStore(new Database(':memory:'));
+    try {
+      expect(store.getStats()).toEqual({
+        totalReviews: 0,
+        totalFindings: 0,
+        falsePositiveCount: 0,
+        avgRiskScore: 0,
+        avgDurationMs: 0,
+        totalTokenUsed: 0,
+        severityDistribution: [
+          { severity: 'BLOCKER', count: 0 },
+          { severity: 'WARNING', count: 0 },
+          { severity: 'NIT', count: 0 },
+          { severity: 'PRAISE', count: 0 },
+        ],
+        riskTrend: [],
+        topRiskyFiles: [],
+      });
+    } finally {
+      store.close();
+    }
+  });
+
+  it('aggregates severity distribution, daily trend and top risky files', () => {
+    const store = new ReviewStore(new Database(':memory:'));
+    try {
+      store.saveReport(
+        makeReport('review-a', [
+          makeFinding(),
+          makeFinding({ severity: 'NIT', filePath: 'src/other.ts', title: 'nit' }),
+        ]),
+      );
+      store.saveReport(
+        makeReport('review-b', [makeFinding({ filePath: 'src/other.ts', title: 'again' })]),
+      );
+      // 标记一条误报：误报仍计入检出分布，但单独计数（误报率 = falsePositiveCount / totalFindings）
+      const [flagged] = store.getReportDetail('review-b').findings;
+      if (flagged === undefined) throw new Error('expected a finding row');
+      store.setFindingFalsePositive(flagged.id, true);
+
+      const stats = store.getStats();
+      expect(stats.totalReviews).toBe(2);
+      expect(stats.totalFindings).toBe(3);
+      expect(stats.falsePositiveCount).toBe(1);
+      expect(stats.avgRiskScore).toBe(45);
+      expect(stats.severityDistribution[0]).toEqual({ severity: 'BLOCKER', count: 2 });
+      // Top 高风险文件按发现数降序：other.ts 两条（NIT + BLOCKER），config.ts 一条
+      expect(stats.topRiskyFiles[0]).toMatchObject({
+        filePath: 'src/other.ts',
+        findingCount: 2,
+        blockerCount: 1,
+      });
+      expect(stats.riskTrend).toHaveLength(1);
+      expect(stats.riskTrend[0]).toMatchObject({ reviews: 2, avgRiskScore: 45 });
+    } finally {
+      store.close();
+    }
+  });
+
   it('rejects unknown review ids and corrupt report rows', () => {
     const store = new ReviewStore(new Database(':memory:'));
     try {

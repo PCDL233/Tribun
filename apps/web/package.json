@@ -12,9 +12,10 @@
     "@ai-review/shared": "workspace:*",
     "@tanstack/react-query": "catalog:",
     "antd": "catalog:",
+    "echarts": "catalog:",
     "react": "catalog:",
-    "zod": "catalog:",
-    "react-dom": "catalog:"
+    "react-dom": "catalog:",
+    "zod": "catalog:"
   },
   "devDependencies": {
     "@types/react": "catalog:",
