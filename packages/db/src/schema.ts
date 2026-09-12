@@ -27,6 +27,11 @@ export const reviews = sqliteTable('reviews', {
   tokenUsed: integer('token_used').notNull().default(0),
   durationMs: integer('duration_ms').notNull(),
   reportJson: text('report_json').notNull(),
+  /**
+   * 发起人用户 id（Web 端数据隔离依据）。
+   * 软引用：不建 FK——存量 CLI 直跑的记录无发起人，且删除用户时历史审查应保留。
+   */
+  createdBy: text('created_by'),
   createdAt: text('created_at')
     .notNull()
     .$defaultFn(() => new Date().toISOString()),
@@ -77,6 +82,41 @@ export const reviewCache = sqliteTable('review_cache', {
     .$defaultFn(() => new Date().toISOString()),
 });
 
+/**
+ * 用户表（Web 端认证，方案 3.10 团队版扩展）。
+ * 首个注册用户自动获得 admin 角色（服务端事务内判定），其余为 user。
+ */
+export const users = sqliteTable('users', {
+  id: text('id').primaryKey(),
+  username: text('username').notNull().unique(),
+  /** scrypt 哈希（salt$hash 格式），明文密码与哈希均不出服务端 */
+  passwordHash: text('password_hash').notNull(),
+  role: text('role', { enum: ['admin', 'user'] })
+    .notNull()
+    .default('user'),
+  status: text('status', { enum: ['active', 'disabled'] })
+    .notNull()
+    .default('active'),
+  createdAt: text('created_at')
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+  lastLoginAt: text('last_login_at'),
+});
+
+/** 会话表：不透明令牌（Cookie 承载）→ 用户。过期行由创建新会话时惰性清理 */
+export const sessions = sqliteTable('sessions', {
+  token: text('token').primaryKey(),
+  userId: text('user_id')
+    .notNull()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  expiresAt: text('expires_at').notNull(),
+  createdAt: text('created_at')
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+
 export type ReviewRow = typeof reviews.$inferSelect;
 export type FindingRow = typeof findings.$inferSelect;
 export type ReviewCacheRow = typeof reviewCache.$inferSelect;
+export type UserRow = typeof users.$inferSelect;
+export type SessionRow = typeof sessions.$inferSelect;

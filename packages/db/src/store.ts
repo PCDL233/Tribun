@@ -19,6 +19,8 @@ import { findings, reviewCache, reviews } from './schema.js';
 
 // API 契约类型以 shared 为单一事实源，此处转出口供既有调用方使用
 export type { IdentifiedFinding, ReviewListItem, ReviewReportDetail } from '@ai-review/shared';
+export { UserStore } from './user-store.js';
+export type { SafeUser } from './user-store.js';
 
 /** 报告 JSON 中非规范化段落的结构校验（规范 §5.5：读回的运行时数据必须经 zod 校验） */
 const StoredReportSchema = z.object({
@@ -100,15 +102,40 @@ export class ReviewStore {
         created_at     TEXT NOT NULL
       );
     `);
+    // 存量库升级：reviews 补 created_by 列（新建库由上方建表语句直接包含，ALTER 必然重复报错）
+    try {
+      sqlite.exec('ALTER TABLE reviews ADD COLUMN created_by TEXT');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (!message.includes('duplicate column name')) throw e;
+    }
+    sqlite.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id            TEXT PRIMARY KEY,
+        username      TEXT NOT NULL UNIQUE,
+        password_hash TEXT NOT NULL,
+        role          TEXT NOT NULL DEFAULT 'user',
+        status        TEXT NOT NULL DEFAULT 'active',
+        created_at    TEXT NOT NULL,
+        last_login_at TEXT
+      );
+      CREATE TABLE IF NOT EXISTS sessions (
+        token       TEXT PRIMARY KEY,
+        user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        expires_at  TEXT NOT NULL,
+        created_at  TEXT NOT NULL
+      );
+    `);
     this.db = drizzle(sqlite);
   }
 
   /**
    * 持久化一份完整审查报告（事务：reviews 主行 + findings 行级明细）。
    * @param report 流水线产出的类型化报告
+   * @param createdBy 发起人用户 id（Web 端触发时记录，用于数据隔离；CLI 直跑时缺省）
    * @returns 审查 ID（即 report.meta.reviewId）
    */
-  public saveReport(report: ReviewReport): string {
+  public saveReport(report: ReviewReport, createdBy?: string): string {
     const reviewId = report.meta.reviewId;
     const count = (severity: string): number =>
       report.findings.filter((finding) => finding.severity === severity).length;
@@ -131,6 +158,7 @@ export class ReviewStore {
           nitCount: count('NIT'),
           tokenUsed: report.meta.tokenUsed,
           durationMs: report.meta.durationMs,
+          createdBy: createdBy ?? null,
           reportJson: JSON.stringify({
             summary: report.summary,
             qualityNotes: report.qualityNotes,
@@ -167,11 +195,16 @@ export class ReviewStore {
     return reviewId;
   }
 
-  /** 审查历史（Dashboard 列表页，按创建时间倒序） */
-  public listReviews(limit = 50): ReviewListItem[] {
+  /**
+   * 审查历史（Dashboard 列表页，按创建时间倒序）。
+   * @param options.createdBy 数据隔离过滤：普通用户仅见本人记录（admin 省略此参数）
+   */
+  public listReviews(options: { limit?: number; createdBy?: string } = {}): ReviewListItem[] {
+    const { limit = 50, createdBy } = options;
     const rows = this.db
       .select()
       .from(reviews)
+      .where(createdBy === undefined ? undefined : eq(reviews.createdBy, createdBy))
       .orderBy(desc(reviews.createdAt), desc(reviews.id))
       .limit(limit)
       .all();
@@ -189,6 +222,7 @@ export class ReviewStore {
       tokenUsed: row.tokenUsed,
       durationMs: row.durationMs,
       createdAt: row.createdAt,
+      createdBy: row.createdBy,
     }));
   }
 
@@ -267,6 +301,33 @@ export class ReviewStore {
   }
 
   /**
+   * 查询审查发起人（server 层归属校验用：非本人且非 admin 一律按不存在处理）。
+   * @returns 发起人用户 id；CLI 直跑的存量记录或行不存在返回 null
+   */
+  public getReviewOwner(reviewId: string): string | null {
+    const row = this.db
+      .select({ createdBy: reviews.createdBy })
+      .from(reviews)
+      .where(eq(reviews.id, reviewId))
+      .get();
+    return row?.createdBy ?? null;
+  }
+
+  /**
+   * 查询发现所属审查的发起人（误报标记 API 的归属校验：API 只有 finding id）。
+   * @returns 发起人用户 id；审查无发起人（CLI 存量）或行不存在返回 null
+   */
+  public getFindingReviewOwner(findingId: number): string | null {
+    const row = this.db
+      .select({ createdBy: reviews.createdBy })
+      .from(findings)
+      .innerJoin(reviews, eq(findings.reviewId, reviews.id))
+      .where(eq(findings.id, findingId))
+      .get();
+    return row?.createdBy ?? null;
+  }
+
+  /**
    * 读取审查缓存（方案 3.0 步骤 8：内容哈希去重，供 core 的 ReviewCache 接口调用）。
    * @returns 命中时返回该键的全部发现；未命中或条目损坏（JSON/zod 校验失败）返回 undefined——
    *          缓存损坏按"未命中"降级重审，属规范 §7.7 的可降级错误，不阻断流水线
@@ -335,9 +396,14 @@ export class ReviewStore {
    * 统计聚合（Dashboard 统计分析页的数据源，方案 3.10 页面 4）。
    * 数据量为单机审查历史量级（数千行），全表读出后在 JS 侧聚合，
    * 避免 SQLite 字符串日期聚合的方言耦合。
+   * @param createdBy 数据隔离过滤：普通用户仅统计本人数据（admin 省略此参数）
    */
-  public getStats(): ReviewStats {
-    const reviewRows = this.db.select().from(reviews).all();
+  public getStats(createdBy?: string): ReviewStats {
+    const reviewRows = this.db
+      .select()
+      .from(reviews)
+      .where(createdBy === undefined ? undefined : eq(reviews.createdBy, createdBy))
+      .all();
     const findingRows = this.db
       .select({
         filePath: findings.filePath,
@@ -345,6 +411,8 @@ export class ReviewStore {
         isFalsePositive: findings.isFalsePositive,
       })
       .from(findings)
+      .innerJoin(reviews, eq(findings.reviewId, reviews.id))
+      .where(createdBy === undefined ? undefined : eq(reviews.createdBy, createdBy))
       .all();
 
     const severityCounts = new Map<string, number>();
@@ -417,9 +485,17 @@ export class ReviewStore {
 
 /** 创建基于文件路径的存储（随项目目录持久化，如 .ai-review-cache/reviews.db）；父目录不存在时自动创建 */
 export function createReviewStore(dbFile: string): ReviewStore {
+  return new ReviewStore(openSqlite(dbFile));
+}
+
+/**
+ * 打开 SQLite 连接（ReviewStore 与 UserStore 共用同一连接）。
+ * 导出而非内置于 createReviewStore，是为了让 server 在单库上同时装配两种 store。
+ */
+export function openSqlite(dbFile: string): Database.Database {
   const parent = dirname(dbFile);
   if (parent !== '' && parent !== '.' && !existsSync(parent)) {
     mkdirSync(parent, { recursive: true });
   }
-  return new ReviewStore(new Database(dbFile));
+  return new Database(dbFile);
 }

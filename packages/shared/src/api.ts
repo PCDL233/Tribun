@@ -29,6 +29,8 @@ export const ReviewListItemSchema = z.object({
   tokenUsed: z.number().int(),
   durationMs: z.number().int(),
   createdAt: z.string(),
+  /** 发起人用户 id（数据隔离依据；存量旧记录为 null） */
+  createdBy: z.string().nullable().optional(),
 });
 export type ReviewListItem = z.infer<typeof ReviewListItemSchema>;
 
