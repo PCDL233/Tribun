@@ -11,6 +11,10 @@ export const ReviewMetaSchema = z.object({
   /** 如 "claude-sonnet-4.5 + 静态分析" 或 "mock + 静态分析" */
   model: z.string(),
   mode: z.enum(['fast', 'full']),
+  /** 审查终态；缺省视为 completed（CLI 直跑报告不落库无状态语义） */
+  status: z.enum(['completed', 'failed', 'cancelled']).optional(),
+  /** 失败/取消原因（status 异常时由服务端填充） */
+  errorMessage: z.string().optional(),
   /** 0-100 综合风险评分 */
   riskScore: z.number(),
   durationMs: z.number(),

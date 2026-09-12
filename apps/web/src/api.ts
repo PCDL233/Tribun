@@ -1,22 +1,40 @@
 import {
-  FalsePositiveResponseSchema,
   ReviewListResponseSchema,
   ReviewReportDetailSchema,
   ReviewStatsResponseSchema,
   StartReviewResponseSchema,
+  FalsePositiveResponseSchema,
 } from '@ai-review/shared/api';
 import type { ReviewListItem, ReviewReportDetail, ReviewStats } from '@ai-review/shared/api';
 import { parseResponse } from './parse-response.js';
 
 const API_BASE = '/api';
+type ReviewQueryOptions = {
+  q?: string;
+  status?: 'completed' | 'failed' | 'cancelled';
+  mode?: 'fast' | 'full';
+  severity?: 'BLOCKER' | 'WARNING' | 'NIT';
+  page?: number;
+  pageSize?: number;
+};
 
-/** 查询审查历史（方案 3.10 页面 1：列表 + 风险分/BLOCKER 计数行内展示） */
-export async function fetchReviews(): Promise<ReviewListItem[]> {
-  const body = await parseResponse(ReviewListResponseSchema, await fetch(`${API_BASE}/reviews`));
+export async function fetchReviews(options: ReviewQueryOptions = {}): Promise<ReviewListItem[]> {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries({
+    ...options,
+    page: options.page ?? 1,
+    pageSize: options.pageSize ?? 100,
+  })) {
+    if (value !== undefined && value !== '') params.set(key, String(value));
+  }
+  const query = params.toString();
+  const body = await parseResponse(
+    ReviewListResponseSchema,
+    await fetch(`${API_BASE}/reviews${query ? `?${query}` : ''}`),
+  );
   return body.reviews;
 }
 
-/** 查询报告详情（五段式 + 行级 findings，方案 3.10 页面 2） */
 export async function fetchReviewDetail(reviewId: string): Promise<ReviewReportDetail> {
   return parseResponse(
     ReviewReportDetailSchema,
@@ -24,7 +42,6 @@ export async function fetchReviewDetail(reviewId: string): Promise<ReviewReportD
   );
 }
 
-/** 发起一次审查（后台执行，进度经 SSE 订阅） */
 export async function startReview(repoPath: string, mode: 'fast' | 'full'): Promise<string> {
   const response = await fetch(`${API_BASE}/reviews`, {
     method: 'POST',
@@ -35,7 +52,6 @@ export async function startReview(repoPath: string, mode: 'fast' | 'full'): Prom
   return body.reviewId;
 }
 
-/** 误报标记回写（方案 3.10：乐观更新后调用，失败即抛出回滚） */
 export async function markFalsePositive(
   findingId: number,
   isFalsePositive: boolean,
@@ -48,7 +64,6 @@ export async function markFalsePositive(
   await parseResponse(FalsePositiveResponseSchema, response);
 }
 
-/** 查询统计聚合（方案 3.10 页面 4：风险趋势 / 严重度分布 / Top 高风险文件） */
 export async function fetchStats(): Promise<ReviewStats> {
   const body = await parseResponse(ReviewStatsResponseSchema, await fetch(`${API_BASE}/stats`));
   return body.stats;

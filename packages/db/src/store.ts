@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
-import { desc, eq } from 'drizzle-orm';
+import { and, asc, count, desc, eq, gte, like, lte, or } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { z } from 'zod';
@@ -10,6 +10,7 @@ import type {
   Finding,
   IdentifiedFinding,
   ReviewListItem,
+  ReviewListQuery,
   ReviewReport,
   ReviewReportDetail,
   ReviewStats,
@@ -73,6 +74,8 @@ export class ReviewStore {
         token_used      INTEGER NOT NULL DEFAULT 0,
         duration_ms     INTEGER NOT NULL,
         report_json     TEXT NOT NULL,
+        diff_text       TEXT,
+        error_message   TEXT,
         created_at      TEXT NOT NULL
       );
       CREATE TABLE IF NOT EXISTS findings (
@@ -102,12 +105,18 @@ export class ReviewStore {
         created_at     TEXT NOT NULL
       );
     `);
-    // 存量库升级：reviews 补 created_by 列（新建库由上方建表语句直接包含，ALTER 必然重复报错）
-    try {
-      sqlite.exec('ALTER TABLE reviews ADD COLUMN created_by TEXT');
-    } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      if (!message.includes('duplicate column name')) throw e;
+    // 存量库升级：reviews 补 created_by / diff_text / error_message 列（新建库由上方建表语句直接包含，ALTER 必然重复报错）
+    for (const ddl of [
+      'ALTER TABLE reviews ADD COLUMN created_by TEXT',
+      'ALTER TABLE reviews ADD COLUMN diff_text TEXT',
+      'ALTER TABLE reviews ADD COLUMN error_message TEXT',
+    ]) {
+      try {
+        sqlite.exec(ddl);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        if (!message.includes('duplicate column name')) throw e;
+      }
     }
     sqlite.exec(`
       CREATE TABLE IF NOT EXISTS users (

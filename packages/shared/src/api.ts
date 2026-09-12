@@ -23,6 +23,9 @@ export const ReviewListItemSchema = z.object({
   branch: z.string(),
   model: z.string(),
   mode: z.enum(['fast', 'full']),
+  status: z.enum(['completed', 'failed', 'cancelled']).default('completed'),
+  /** 失败/取消原因（status 异常时非空） */
+  errorMessage: z.string().nullable().optional(),
   /** 0-100 综合风险评分 */
   riskScore: z.number(),
   totalFindings: z.number().int(),
@@ -37,6 +40,26 @@ export const ReviewListItemSchema = z.object({
 });
 export type ReviewListItem = z.infer<typeof ReviewListItemSchema>;
 
+/**
+ * 列表筛选与分页查询参数（GET /api/reviews?...）。
+ * from/to 接受 ISO 日期串（含 `YYYY-MM-DD`，按字符串前缀比较即可命中同日记录）。
+ */
+export const ReviewListQuerySchema = z.object({
+  /** 关键词：模糊匹配 repoPath / branch / reviewId */
+  q: z.string().trim().min(1).optional(),
+  status: z.enum(['completed', 'failed', 'cancelled']).optional(),
+  mode: z.enum(['fast', 'full']).optional(),
+  /** 严重度筛选：映射为对应计数列 > 0 */
+  severity: z.enum(['BLOCKER', 'WARNING', 'NIT']).optional(),
+  repo: z.string().trim().min(1).optional(),
+  branch: z.string().trim().min(1).optional(),
+  from: z.string().trim().min(1).optional(),
+  to: z.string().trim().min(1).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type ReviewListQuery = z.infer<typeof ReviewListQuerySchema>;
+
 /** 报告详情：ReviewReport 的 findings 替换为带行 id 的版本（isFalsePositive 以落库值为准） */
 export const ReviewReportDetailSchema = ReviewReportSchema.extend({
   findings: z.array(IdentifiedFindingSchema),
@@ -48,7 +71,13 @@ export type ReviewReportDetail = z.infer<typeof ReviewReportDetailSchema>;
  * `stage` 为流水线节点名（parse/riskPlan/correctness/security/performance/static/validate/heal/report）。
  */
 export const ReviewStageEventSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('stage'), reviewId: z.string(), stage: z.string() }),
+  z.object({
+    type: z.literal('stage'),
+    reviewId: z.string(),
+    stage: z.string(),
+    /** 阶段明细（如文件数、分流结果、发现计数），由节点增量状态推导 */
+    detail: z.string().optional(),
+  }),
   z.object({
     type: z.literal('completed'),
     reviewId: z.string(),
@@ -65,8 +94,24 @@ export type ReviewStageEvent = z.infer<typeof ReviewStageEventSchema>;
 
 /** POST /api/reviews → 202 */
 export const StartReviewResponseSchema = z.object({ reviewId: z.string() });
-/** GET /api/reviews */
-export const ReviewListResponseSchema = z.object({ reviews: z.array(ReviewListItemSchema) });
+/** POST /api/reviews/:id/rerun → 202 */
+export const RerunReviewResponseSchema = z.object({ reviewId: z.string() });
+/** DELETE /api/reviews/:id → 200 */
+export const DeleteReviewResponseSchema = z.object({ deleted: z.boolean() });
+/** POST /api/reviews/:id/cancel → 200（目标不在运行中时 404） */
+export const CancelReviewResponseSchema = z.object({ cancelled: z.boolean() });
+
+/** GET /api/reviews（筛选 + 服务端分页；旧记录无 diff/错误信息字段为空） */
+export const ReviewListResponseSchema = z.object({
+  reviews: z.array(ReviewListItemSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+});
+
+/** GET /api/reviews/:id/diff → 被审查的原始 unified diff（存量记录未持久化时为 null） */
+export const ReviewDiffResponseSchema = z.object({ diffText: z.string().nullable() });
+
 /** PATCH /api/findings/:id → 200 */
 export const FalsePositiveResponseSchema = z.object({ updated: z.boolean() });
 

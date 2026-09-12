@@ -27,6 +27,10 @@ export const reviews = sqliteTable('reviews', {
   tokenUsed: integer('token_used').notNull().default(0),
   durationMs: integer('duration_ms').notNull(),
   reportJson: text('report_json').notNull(),
+  /** 被审查的原始 unified diff（Dashboard diff 视图数据源；超长截断，存量记录为 NULL） */
+  diffText: text('diff_text'),
+  /** 失败/取消原因（status 异常时非空） */
+  errorMessage: text('error_message'),
   /**
    * 发起人用户 id（Web 端数据隔离依据）。
    * 软引用：不建 FK——存量 CLI 直跑的记录无发起人，且删除用户时历史审查应保留。

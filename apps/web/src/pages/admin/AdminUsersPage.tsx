@@ -37,7 +37,9 @@ export function AdminUsersPage(): ReactElement {
         title: '密码已重置',
         content: (
           <Space direction="vertical">
-            <Typography.Text type="secondary">新密码（仅显示一次，请立即转告该用户）：</Typography.Text>
+            <Typography.Text type="secondary">
+              新密码（仅显示一次，请立即转告该用户）：
+            </Typography.Text>
             <Typography.Text copyable code style={{ fontSize: 16 }}>
               {newPassword}
             </Typography.Text>
@@ -66,11 +68,16 @@ export function AdminUsersPage(): ReactElement {
       width: 120,
       render: (role: string, record) => (
         <Space size={4}>
-          <Tag color={role === 'admin' ? 'gold' : 'blue'}>{role === 'admin' ? '管理员' : '用户'}</Tag>
+          <Tag color={role === 'admin' ? 'gold' : 'blue'}>
+            {role === 'admin' ? '管理员' : '用户'}
+          </Tag>
           {record.id !== currentUser?.id ? (
             <Typography.Link
               onClick={() =>
-                patchMutation.mutate({ userId: record.id, patch: { role: role === 'admin' ? 'user' : 'admin' } })
+                patchMutation.mutate({
+                  userId: record.id,
+                  patch: { role: role === 'admin' ? 'user' : 'admin' },
+                })
               }
             >
               {role === 'admin' ? '降为用户' : '设为管理员'}
@@ -118,7 +125,9 @@ export function AdminUsersPage(): ReactElement {
           <Typography.Text type="secondary">当前账号</Typography.Text>
         ) : (
           <Space size={8}>
-            <Typography.Link onClick={() => resetMutation.mutate(record.id)}>重置密码</Typography.Link>
+            <Typography.Link onClick={() => resetMutation.mutate(record.id)}>
+              重置密码
+            </Typography.Link>
             <Popconfirm
               title="确认删除该用户？"
               description="删除后该用户将无法登录，其历史审查记录保留。"
@@ -134,7 +143,14 @@ export function AdminUsersPage(): ReactElement {
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
       {error !== null ? (
-        <Alert type="error" showIcon message="操作失败" description={describeError(error)} closable onClose={() => setError(null)} />
+        <Alert
+          type="error"
+          showIcon
+          message="操作失败"
+          description={describeError(error)}
+          closable
+          onClose={() => setError(null)}
+        />
       ) : null}
       <Table<User>
         rowKey="id"
