@@ -11,6 +11,7 @@
   "dependencies": {
     "@ai-review/shared": "workspace:*",
     "@tanstack/react-query": "catalog:",
+    "@tanstack/react-router": "catalog:",
     "antd": "catalog:",
     "echarts": "catalog:",
     "react": "catalog:",

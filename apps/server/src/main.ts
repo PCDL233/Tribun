@@ -1,5 +1,5 @@
-import { existsSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { existsSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -70,14 +70,13 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
   if (options.webDistDir !== undefined && existsSync(options.webDistDir)) {
     // Hono 同时托管 Dashboard 静态产物（方案 3.10：单容器提供 API + 前端）
     app.use('*', serveStatic({ root: options.webDistDir }));
-    // SPA fallback：非 API/指标路径的未命中请求回退 index.html，前端深链接（如 /reviews/:id）刷新可用
-    const spaFallback = serveStatic({
-      root: options.webDistDir,
-      rewriteRequestPath: () => '/index.html',
-    });
-    app.get('*', async (c, next) => {
+    // SPA fallback：非 API/指标路径的未命中请求回退 index.html，前端深链接（如 /reviews/:id）刷新可用。
+    // 直接读文件返回：serveStatic 的 rewriteRequestPath 路径在 node-server 下存在流式响应兼容问题
+    const indexHtmlPath = join(options.webDistDir, 'index.html');
+    const indexHtml = readFileSync(indexHtmlPath, 'utf8');
+    app.get('*', (c) => {
       if (c.req.path.startsWith('/api/') || c.req.path === '/metrics') return c.notFound();
-      await spaFallback(c, next);
+      return c.html(indexHtml);
     });
   }
 

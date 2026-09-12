@@ -13,7 +13,10 @@ export default defineConfig({
         // Vite 8（Rolldown 内核）以 advancedChunks 取代 manualChunks 对象形式：
         // echarts 按需注册后仍较重，独立 chunk 利于浏览器缓存
         advancedChunks: {
-          groups: [{ name: 'echarts', test: /node_modules[\/]echarts[\/]/ }],
+          groups: [
+            { name: 'echarts', test: /node_modules[\/]echarts[\/]/ },
+            { name: 'antd', test: /node_modules[\/](antd|@ant-design|rc-[a-z-]+)[\/]/ },
+          ],
         },
       },
     },

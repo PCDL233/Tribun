@@ -2,6 +2,9 @@ import { z } from 'zod';
 import { FindingSchema } from './finding.js';
 import { ReviewReportSchema } from './report.js';
 
+// 认证/用户契约无 node 依赖，随 api 子路径一并供浏览器端消费
+export * from './auth.js';
+
 /**
  * —— API 契约（方案 2.3：前端零手工类型，全部推导自 shared）——
  * 本文件是 @ai-review/server 的 REST/SSE 响应形状与 @ai-review/web 的消费端的单一事实源。
