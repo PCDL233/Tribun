@@ -3,7 +3,7 @@ import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { createReviewStore } from '@ai-review/db';
+import { openSqlite, ReviewStore, UserStore } from '@ai-review/db';
 import { createGitRunner, createIgnoreRules, GitReader } from '@ai-review/diff';
 import { createMockProvider } from '@ai-review/llm';
 import { runReviewPipeline } from '@ai-review/core';
@@ -53,7 +53,10 @@ function createMockDeps(repoPath: string, mode: 'fast' | 'full'): PipelineDeps {
 }
 
 export async function startServer(options: ServerCliOptions): Promise<void> {
-  const store = createReviewStore(options.dbFile);
+  // ReviewStore 与 UserStore 共用同一 SQLite 连接（users/sessions/reviews 同库）
+  const sqlite = openSqlite(options.dbFile);
+  const store = new ReviewStore(sqlite);
+  const users = new UserStore(sqlite);
   const metrics = createReviewMetrics();
   const reviewCache = createStoreReviewCache(store);
   const service = new ReviewService(
@@ -62,11 +65,20 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
     runReviewPipeline,
     metrics,
   );
-  const app = buildApp({ store, service, metrics });
+  const app = buildApp({ store, users, service, metrics });
 
   if (options.webDistDir !== undefined && existsSync(options.webDistDir)) {
     // Hono 同时托管 Dashboard 静态产物（方案 3.10：单容器提供 API + 前端）
     app.use('*', serveStatic({ root: options.webDistDir }));
+    // SPA fallback：非 API/指标路径的未命中请求回退 index.html，前端深链接（如 /reviews/:id）刷新可用
+    const spaFallback = serveStatic({
+      root: options.webDistDir,
+      rewriteRequestPath: () => '/index.html',
+    });
+    app.get('*', async (c, next) => {
+      if (c.req.path.startsWith('/api/') || c.req.path === '/metrics') return c.notFound();
+      await spaFallback(c, next);
+    });
   }
 
   const server = serve({ fetch: app.fetch, port: options.port });

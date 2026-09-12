@@ -30,6 +30,8 @@ export type StartReviewOptions = {
   mode: 'fast' | 'full';
   /** 阻断阈值，默认 BLOCKER（退出码契约的 BLOCKER 级语义） */
   blockOn?: Severity;
+  /** 发起人用户 id（Web 端数据隔离依据；CLI 直跑路径不传） */
+  createdBy?: string;
 };
 
 /** 组装流水线依赖（当前为 mock provider；真实 Provider 链接入后在此替换） */
@@ -97,7 +99,7 @@ export class ReviewService {
         },
       });
       const report = await this.buildReport(reviewId, options, deps, state);
-      this.store.saveReport(report);
+      this.store.saveReport(report, options.createdBy);
       this.metrics?.recordCompleted(report);
       const blockerCount = report.findings.filter(
         (finding) => finding.severity === 'BLOCKER' && !finding.isFalsePositive,
