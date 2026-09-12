@@ -64,5 +64,3 @@ describe('astFindings', () => {
     expect(astFindings([markdown])).toEqual([]);
   });
 });
-
-

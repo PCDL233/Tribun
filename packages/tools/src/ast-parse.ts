@@ -202,6 +202,3 @@ export function astFindings(files: readonly FileContext[]): Finding[] {
     return findings;
   });
 }
-
-
-

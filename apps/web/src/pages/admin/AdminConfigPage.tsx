@@ -59,7 +59,7 @@ export function AdminConfigPage(): ReactElement {
         title="系统配置"
         description="统一管理审查模式、静态分析、RAG 与报告策略。密钥只接受环境变量引用，不会以明文写入配置文件。"
       />
-      {saveMutation.isError && <Alert type="error" showIcon message="保存失败" description={describeError(saveMutation.error)} closable />} 
+      {saveMutation.isError && <Alert type="error" showIcon message="保存失败" description={describeError(saveMutation.error)} closable />}
       {saved && <Alert type="success" showIcon message="配置已保存" closable onClose={() => setSaved(false)} />}
       <Form form={form} layout="vertical" onFinish={submit}>
         <Row gutter={[16, 16]}>
@@ -139,4 +139,3 @@ export function AdminConfigPage(): ReactElement {
     </div>
   );
 }
-

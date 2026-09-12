@@ -53,4 +53,3 @@ export const AiReviewConfigSchema = z.object({
 });
 
 export type AiReviewConfig = z.infer<typeof AiReviewConfigSchema>;
-
