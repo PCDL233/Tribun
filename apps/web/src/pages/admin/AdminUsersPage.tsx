@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
-import { useState } from 'react';
-import { Alert, App as AntdApp, Popconfirm, Space, Table, Tag, Typography } from 'antd';
+import { useMemo, useState } from 'react';
+import { Alert, App as AntdApp, Input, Popconfirm, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { User } from '@ai-review/shared/api';
 import { deleteUser, fetchUsers, patchUser, resetUserPassword } from '../../api/admin';
@@ -14,6 +14,7 @@ export function AdminUsersPage(): ReactElement {
   const { user: currentUser } = useAuth();
   const queryClient = useQueryClient();
   const [error, setError] = useState<unknown>(null);
+  const [search, setSearch] = useState('');
 
   const usersQuery = useQuery({ queryKey: ['admin', 'users'], queryFn: fetchUsers });
 
@@ -59,6 +60,14 @@ export function AdminUsersPage(): ReactElement {
     },
     onError: (e) => setError(e),
   });
+
+  const filteredUsers = useMemo(() => {
+    const keyword = search.trim().toLowerCase();
+    if (keyword === '') return usersQuery.data ?? [];
+    return (usersQuery.data ?? []).filter((user) =>
+      user.username.toLowerCase().includes(keyword) || user.id.toLowerCase().includes(keyword),
+    );
+  }, [search, usersQuery.data]);
 
   const columns: ColumnsType<User> = [
     { title: '用户名', dataIndex: 'username', width: 160 },
@@ -152,14 +161,22 @@ export function AdminUsersPage(): ReactElement {
           onClose={() => setError(null)}
         />
       ) : null}
-      <Table<User>
-        rowKey="id"
-        size="small"
-        loading={usersQuery.isPending}
-        columns={columns}
-        dataSource={usersQuery.data ?? []}
-        pagination={false}
-      />
+      <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Input.Search
+          allowClear
+          placeholder="按用户名或用户 ID 搜索"
+          onChange={(event) => setSearch(event.target.value)}
+          style={{ maxWidth: 360 }}
+        />
+        <Table<User>
+          rowKey="id"
+          size="small"
+          loading={usersQuery.isPending}
+          columns={columns}
+          dataSource={filteredUsers}
+          pagination={{ pageSize: 10, showSizeChanger: false, showTotal: (total) => `共 ${total} 个用户` }}
+        />
+      </Space>
       <Typography.Paragraph type="secondary" style={{ marginBottom: 0 }}>
         提示：无法对当前登录账号降级、禁用或删除，防止误操作导致系统失去管理员。
       </Typography.Paragraph>

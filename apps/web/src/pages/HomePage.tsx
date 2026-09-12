@@ -1,13 +1,14 @@
 import { useNavigate } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Button, Card, Col, Row, Statistic, Table, Tag, Typography } from 'antd';
+import { ArrowRightOutlined, BarChartOutlined, HistoryOutlined, PlayCircleOutlined } from '@ant-design/icons';
+import { Button, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { ReviewListItem } from '@ai-review/shared/api';
 import { fetchReviews, fetchStats } from '../api';
 import { describeError } from '../parse-response';
 import { useAuth } from '../hooks/use-auth';
-import { CardHeading } from '../components/PageHeader';
+import { CardHeading, PageHeader } from '../components/PageHeader';
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat('zh-CN').format(value);
@@ -16,7 +17,7 @@ function formatCount(value: number): string {
 export function HomePage(): ReactElement {
   const { user } = useAuth();
   const navigate = useNavigate();
-  const statsQuery = useQuery({ queryKey: ['stats'], queryFn: fetchStats });
+  const statsQuery = useQuery({ queryKey: ['stats'], queryFn: () => fetchStats() });
   const reviewsQuery = useQuery({ queryKey: ['reviews'], queryFn: () => fetchReviews() });
 
   const recentColumns: ColumnsType<ReviewListItem> = [
@@ -39,7 +40,7 @@ export function HomePage(): ReactElement {
       render: (riskScore: number) => (
         <span className="score-number">
           {riskScore}
-          <span style={{ color: '#9aa4b5', fontWeight: 500 }}> /100</span>
+          <span className="score-suffix"> /100</span>
         </span>
       ),
     },
@@ -59,36 +60,29 @@ export function HomePage(): ReactElement {
 
   return (
     <div className="page-stack">
-      <section className="dashboard-hero">
-        <div className="hero-content">
-          <div className="hero-eyebrow">Good to see you, {user?.username ?? 'there'}</div>
-          <h1 className="hero-title">
-            让每一次提交，
-            <br />
-            都更有把握。
-          </h1>
-          <p className="hero-description">
-            用 AI 快速识别风险、聚合团队洞察，在代码进入主分支前，把真正重要的问题提前暴露出来。
-          </p>
-          <div className="hero-actions">
-            <Button type="primary" onClick={() => void navigate({ to: '/run' })}>
-              开始一次审查 →
-            </Button>
+      <PageHeader
+        eyebrow="Workspace"
+        title="工作台"
+        description="查看团队审查概况，发起新的代码审查，或继续跟进最近的风险发现。"
+        actions={<Button type="primary" icon={<PlayCircleOutlined />} onClick={() => void navigate({ to: '/run' })}>发起审查</Button>}
+      />
+
+      <Card className="surface-card welcome-card">
+        <div>
+          <Typography.Title level={3} className="welcome-title">欢迎回来，{user?.username ?? '当前用户'}</Typography.Title>
+          <Typography.Paragraph className="welcome-description">
+            通过统一的 Diff、静态分析和模型审查结果，在合并前快速确认代码质量。
+          </Typography.Paragraph>
+          <Space wrap>
+            <Button type="primary" onClick={() => void navigate({ to: '/run' })}>开始审查</Button>
             <Button onClick={() => void navigate({ to: '/reviews' })}>查看历史报告</Button>
-          </div>
+          </Space>
         </div>
-        <div className="hero-signal">
-          <div className="hero-signal-label">本月审查完成度</div>
-          <div className="hero-signal-value">
-            {statsQuery.data ? `${Math.min(statsQuery.data.totalReviews, 999)}` : '—'}{' '}
-            <span style={{ fontSize: 12, fontWeight: 500, color: '#aab0ff' }}>次</span>
-          </div>
-          <div className="hero-signal-bar" />
-          <div style={{ marginTop: 8, color: 'rgba(255,255,255,.46)', fontSize: 11 }}>
-            持续积累团队质量数据
-          </div>
+        <div className="welcome-summary">
+          <Statistic title="累计审查" value={statsQuery.data?.totalReviews ?? 0} loading={statsQuery.isPending} />
+          <Typography.Text type="secondary">持续积累可追踪的质量数据</Typography.Text>
         </div>
-      </section>
+      </Card>
 
       {statsQuery.isError ? (
         <Card className="surface-card">
@@ -99,7 +93,7 @@ export function HomePage(): ReactElement {
       ) : (
         <Row gutter={[16, 16]}>
           <Col xs={12} lg={6}>
-            <Card className="surface-card stat-card accent-purple">
+            <Card className="surface-card stat-card accent-blue">
               <Statistic
                 title="审查总数"
                 value={statsQuery.data?.totalReviews ?? 0}
@@ -144,56 +138,32 @@ export function HomePage(): ReactElement {
         </Row>
       )}
 
-      <section>
-        <div
-          style={{
-            display: 'flex',
-            justifyContent: 'space-between',
-            alignItems: 'center',
-            marginBottom: 14,
-            gap: 12,
-          }}
-        >
-          <div>
-            <div className="page-eyebrow" style={{ marginBottom: 4 }}>
-              Stay in the loop
-            </div>
-            <Typography.Title level={4} style={{ margin: 0, letterSpacing: '-.03em' }}>
-              快速入口
-            </Typography.Title>
-          </div>
-        </div>
-        <div className="quick-grid">
-          <div className="quick-link" onClick={() => void navigate({ to: '/run' })}>
-            <div>
-              <div className="quick-link-title">发起一次新审查</div>
-              <div className="quick-link-copy">输入仓库路径，实时查看分析进度</div>
-            </div>
-            <span className="quick-link-arrow">↗</span>
-          </div>
-          <div className="quick-link" onClick={() => void navigate({ to: '/reviews' })}>
-            <div>
-              <div className="quick-link-title">浏览历史报告</div>
-              <div className="quick-link-copy">按风险评分回看团队质量趋势</div>
-            </div>
-            <span className="quick-link-arrow">↗</span>
-          </div>
-          <div className="quick-link" onClick={() => void navigate({ to: '/stats' })}>
-            <div>
-              <div className="quick-link-title">查看统计分析</div>
-              <div className="quick-link-copy">定位高风险文件与成本变化</div>
-            </div>
-            <span className="quick-link-arrow">↗</span>
-          </div>
-        </div>
-      </section>
+      <Card className="surface-card" title={<CardHeading title="常用操作" />}>
+        <Row gutter={[12, 12]}>
+          <Col xs={24} md={8}>
+            <Button block icon={<PlayCircleOutlined />} onClick={() => void navigate({ to: '/run' })}>
+              发起一次新审查
+            </Button>
+          </Col>
+          <Col xs={24} md={8}>
+            <Button block icon={<HistoryOutlined />} onClick={() => void navigate({ to: '/reviews' })}>
+              浏览历史报告
+            </Button>
+          </Col>
+          <Col xs={24} md={8}>
+            <Button block icon={<BarChartOutlined />} onClick={() => void navigate({ to: '/stats' })}>
+              查看统计分析
+            </Button>
+          </Col>
+        </Row>
+      </Card>
 
       <Card
         className="surface-card data-table-card"
         title={<CardHeading title="最近审查" />}
         extra={
-          <Button type="link" onClick={() => void navigate({ to: '/reviews' })}>
-            查看全部 →
+          <Button type="link" icon={<ArrowRightOutlined />} onClick={() => void navigate({ to: '/reviews' })}>
+            查看全部
           </Button>
         }
       >

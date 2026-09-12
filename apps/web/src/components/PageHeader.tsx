@@ -6,6 +6,7 @@ export type PageHeaderProps = {
   title: string;
   description?: string;
   actions?: ReactNode;
+  extra?: ReactNode;
 };
 
 export function PageHeader(props: PageHeaderProps): ReactElement {
@@ -20,7 +21,12 @@ export function PageHeader(props: PageHeaderProps): ReactElement {
           <Typography.Paragraph className="page-subtitle">{props.description}</Typography.Paragraph>
         ) : null}
       </div>
-      {props.actions ? <div>{props.actions}</div> : null}
+      {props.extra || props.actions ? (
+        <div className="page-header-extra">
+          {props.extra}
+          {props.actions}
+        </div>
+      ) : null}
     </div>
   );
 }

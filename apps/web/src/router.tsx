@@ -21,6 +21,8 @@ import { ProfilePage } from './pages/ProfilePage';
 import { RegisterPage } from './pages/RegisterPage';
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage';
+import { AdminConfigPage } from './pages/admin/AdminConfigPage';
+import { AdminKnowledgePage } from './pages/admin/AdminKnowledgePage';
 import { ReportDetailView } from './views/ReportDetailView';
 import { ReviewListView } from './views/ReviewListView';
 import { RunReviewView } from './views/RunReviewView';
@@ -36,7 +38,10 @@ async function requireUser(context: RouterContext, href: string): Promise<User> 
     staleTime: Infinity,
     retry: false,
   });
-  if (user === null) throw redirect({ to: '/login', search: { redirect: href } });
+  if (user === null) {
+    // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect is implemented as a thrown control-flow value.
+    throw redirect({ to: '/login', search: { redirect: href } });
+  }
   return user;
 }
 
@@ -156,7 +161,10 @@ const adminRoute = createRoute({
   component: AdminLayout,
   beforeLoad: async ({ context, location }) => {
     const user = await requireUser(context, location.href);
-    if (user.role !== 'admin') throw redirect({ to: '/' });
+    if (user.role !== 'admin') {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect is implemented as a thrown control-flow value.
+      throw redirect({ to: '/' });
+    }
   },
 });
 
@@ -170,6 +178,18 @@ const adminUsersRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: '/users',
   component: AdminUsersPage,
+});
+
+const adminConfigRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/config',
+  component: AdminConfigPage,
+});
+
+const adminKnowledgeRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/knowledge',
+  component: AdminKnowledgePage,
 });
 
 function NotFound(): ReactElement {
@@ -187,7 +207,7 @@ export const routeTree = rootRoute.addChildren([
     statsRoute,
     profileRoute,
   ]),
-  adminRoute.addChildren([adminIndexRoute, adminUsersRoute]),
+  adminRoute.addChildren([adminIndexRoute, adminUsersRoute, adminConfigRoute, adminKnowledgeRoute]),
 ]);
 
 export const router = createRouter({

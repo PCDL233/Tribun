@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { User } from '@ai-review/shared/api';
+import type { UseMutationResult } from '@tanstack/react-query';
+import type { LoginInput, RegisterInput, User } from '@ai-review/shared/api';
 import { changePassword, fetchMe, login, logout, register } from '../api/auth';
 
 /** 认证状态的唯一查询键（路由守卫与组件共享） */
@@ -19,7 +20,7 @@ export function useAuth(): { user: User | null; isPending: boolean } {
   return { user: query.data ?? null, isPending: query.isPending };
 }
 
-export function useLogin() {
+export function useLogin(): UseMutationResult<User, Error, LoginInput> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: login,
@@ -27,7 +28,7 @@ export function useLogin() {
   });
 }
 
-export function useRegister() {
+export function useRegister(): UseMutationResult<User, Error, RegisterInput> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: register,
@@ -35,7 +36,7 @@ export function useRegister() {
   });
 }
 
-export function useLogout() {
+export function useLogout(): UseMutationResult<void, Error, void> {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: logout,
@@ -43,6 +44,6 @@ export function useLogout() {
   });
 }
 
-export function useChangePassword() {
+export function useChangePassword(): UseMutationResult<void, Error, { oldPassword: string; newPassword: string }> {
   return useMutation({ mutationFn: changePassword });
 }

@@ -19,7 +19,25 @@ export class ApiError extends Error {
 export async function parseResponse<T>(schema: SchemaParser<T>, response: Response): Promise<T> {
   if (!response.ok) {
     const bodyText = await response.text().catch(() => '');
-    throw new ApiError(`API ${response.status}: ${bodyText}`);
+    let detail = bodyText;
+    try {
+      const parsed = JSON.parse(bodyText) as unknown;
+      if (typeof parsed === 'object' && parsed !== null && 'error' in parsed && typeof parsed.error === 'string') {
+        detail = parsed.error;
+      }
+    } catch {
+      // 非 JSON 错误体保留原始文本，便于定位代理或网关问题。
+    }
+    const statusMessage: Record<number, string> = {
+      400: '请求参数有误',
+      401: '登录已失效，请重新登录',
+      403: '没有执行此操作的权限',
+      404: '请求的资源不存在',
+      409: '当前状态不允许执行此操作',
+      429: '请求过于频繁，请稍后再试',
+    };
+    const prefix = statusMessage[response.status] ?? `请求失败（${response.status}）`;
+    throw new ApiError(detail === '' ? prefix : `${prefix}：${detail}`);
   }
   let json: unknown;
   try {
