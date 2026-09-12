@@ -14,6 +14,7 @@
     "format": "prettier --write ."
   },
   "devDependencies": {
+    "@ai-review/cli": "workspace:*",
     "@ai-review/eslint-config": "workspace:*",
     "@ai-review/tsconfig": "workspace:*",
     "eslint": "catalog:",
