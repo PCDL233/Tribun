@@ -68,6 +68,6 @@ describe('ToolRegistry', () => {
     const registry = buildDefaultRegistry();
     const context = makeContext(['a.ts']);
     expect(registry.runAll(context, ['secret_scan', 'dependency_scan'])).toEqual([]);
-    expect(registry.list()).toEqual(['complexity_check', 'secret_scan']);
+    expect(registry.list()).toEqual(['ast_parse', 'complexity_check', 'dependency_scan', 'secret_scan']);
   });
 });

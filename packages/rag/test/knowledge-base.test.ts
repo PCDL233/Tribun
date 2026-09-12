@@ -1,10 +1,10 @@
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import type { EmbeddingModelV2 } from 'ai';
 import { afterAll, describe, expect, it } from 'vitest';
 import { chunkFile } from '../src/chunker.js';
 import { KnowledgeBase, KnowledgeBaseError } from '../src/knowledge-base.js';
-import type { EmbeddingModelV2 } from 'ai';
 
 let tempDir: string | undefined;
 

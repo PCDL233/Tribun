@@ -233,7 +233,7 @@ rag:
   topK: 5
 
 staticAnalysis:
-  enabledTools: [complexity_check, secret_scan, dependency_scan]
+  enabledTools: [ast_parse, complexity_check, secret_scan, dependency_scan]
   complexityThreshold: 15
 
 report:

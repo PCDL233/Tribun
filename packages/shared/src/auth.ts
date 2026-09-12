@@ -71,6 +71,19 @@ export const UserListResponseSchema = z.object({ users: z.array(UserSchema) });
 export type UserListResponse = z.infer<typeof UserListResponseSchema>;
 
 /** GET /api/admin/overview —— 后台系统概览卡片数据源 */
+const AdminRecentFailureSchema = z.object({
+  reviewId: z.string(),
+  repoPath: z.string(),
+  errorMessage: z.string().nullable().optional(),
+  createdAt: z.string(),
+});
+
+const AdminRiskTrendPointSchema = z.object({
+  date: z.string(),
+  reviews: z.number().int().nonnegative(),
+  avgRiskScore: z.number().nonnegative(),
+});
+
 export const AdminOverviewSchema = z.object({
   userCount: z.number().int().nonnegative(),
   adminCount: z.number().int().nonnegative(),
@@ -79,6 +92,12 @@ export const AdminOverviewSchema = z.object({
   totalTokenUsed: z.number().int().nonnegative(),
   cacheEntries: z.number().int().nonnegative(),
   tokenSavedByCache: z.number().int().nonnegative(),
+  /** 失败审查占全部已落库审查的比例（0-1） */
+  failureRate: z.number().min(0).max(1),
+  /** 管理后台近 7 日风险趋势 */
+  riskTrend: z.array(AdminRiskTrendPointSchema),
+  /** 最近失败任务，按创建时间倒序 */
+  recentFailures: z.array(AdminRecentFailureSchema),
 });
 export type AdminOverview = z.infer<typeof AdminOverviewSchema>;
 export const AdminOverviewResponseSchema = z.object({ overview: AdminOverviewSchema });

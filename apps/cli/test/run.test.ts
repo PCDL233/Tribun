@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EXIT_CODES } from '@ai-review/shared';
@@ -41,6 +41,28 @@ describe('runReview', () => {
     await expect(
       runReview({ repoPath: repo, mode: 'fast', blockOn: 'BLOCKER', json: true }),
     ).resolves.toBe(EXIT_CODES.ok);
+  });
+
+  it('writes markdown and JSON reports to the configured output directory', async () => {
+    const repo = makeTempRepo();
+    repos.push(repo);
+    await expect(
+      runReview({ repoPath: repo, mode: 'fast', blockOn: 'BLOCKER', json: true }),
+    ).resolves.toBe(EXIT_CODES.ok);
+
+    const outputDir = join(repo, '.ai-review-reports');
+    const files = readdirSync(outputDir).sort();
+    expect(files).toHaveLength(2);
+    expect(files[0]).toMatch(/^review-\d+\.json$/);
+    expect(files[1]).toMatch(/^review-\d+\.md$/);
+    const jsonFile = files.find((file) => file.endsWith('.json'));
+    if (jsonFile === undefined) throw new Error('expected JSON report');
+    const report = JSON.parse(readFileSync(join(outputDir, jsonFile), 'utf8')) as {
+      qualityNotes: string[];
+      suggestions: string[];
+    };
+    expect(report.qualityNotes.length).toBeGreaterThan(0);
+    expect(report.suggestions).toEqual([]);
   });
 
   it('blocks on a staged hardcoded secret detected by static analysis', async () => {

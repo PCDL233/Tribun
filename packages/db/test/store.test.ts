@@ -118,6 +118,8 @@ describe('ReviewStore', () => {
         ],
         riskTrend: [],
         topRiskyFiles: [],
+        agentDistribution: [],
+        tokenTrend: [],
       });
     } finally {
       store.close();

@@ -1,3 +1,5 @@
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { zValidator } from '@hono/zod-validator';
@@ -8,7 +10,18 @@ import {
   AdminOverviewResponseSchema,
   AdminUserPatchSchema,
   UserListResponseSchema,
+  ReviewListQuerySchema,
+  ReviewStatsQuerySchema,
+  ReviewDiffResponseSchema,
+  DeleteReviewResponseSchema,
+  CancelReviewResponseSchema,
+  AdminConfigSchema,
+  AdminConfigResponseSchema,
+  AiReviewConfigSchema,
+  KnowledgeReindexResponseSchema,
+  KnowledgeStatusResponseSchema,
 } from '@ai-review/shared';
+import { renderHtml, renderJson, renderMarkdown } from '@ai-review/report';
 import { createRequireAuth, generateRandomPassword, hashPassword, registerAuthRoutes, requireAdmin } from './auth.js';
 import type { ReviewMetrics } from './metrics.js';
 import type { ReviewStageEvent } from './review-service.js';
@@ -18,6 +31,7 @@ import type { ReviewService } from './review-service.js';
 export const StartReviewSchema = z.object({
   repoPath: z.string().min(1),
   mode: z.enum(['fast', 'full']).default('fast'),
+  blockOn: z.enum(['BLOCKER', 'WARNING', 'NIT']).optional(),
 });
 
 /** PATCH /api/findings/:id 入参（Dashboard 误报标记回写） */
@@ -33,6 +47,15 @@ export type AppDeps = {
   users: UserStore;
   service: ReviewService;
   metrics: ReviewMetrics;
+  /** 管理员配置文件位置；未提供时使用当前目录 .ai-review.yml */
+  configPath?: string;
+  /** 可选知识库管理器，未装配时返回 idle 状态 */
+  knowledge?: KnowledgeManager;
+};
+
+export type KnowledgeManager = {
+  getStatus(): Promise<unknown> | unknown;
+  reindex(): Promise<void>;
 };
 
 /** SSE 桥接队列：ReviewService 的同步广播 → streamSSE 的异步消费 */
@@ -99,24 +122,89 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   );
 
   app.post('/api/reviews', zValidator('json', StartReviewSchema), (c) => {
-    const { repoPath, mode } = c.req.valid('json');
+    const { repoPath, mode, blockOn } = c.req.valid('json');
     const createdBy = c.get('user').id;
-    return c.json({ reviewId: deps.service.startReview({ repoPath, mode, createdBy }) }, 202);
+    return c.json({ reviewId: deps.service.startReview({ repoPath, mode, createdBy, ...(blockOn === undefined ? {} : { blockOn }) }) }, 202);
   });
 
-  // 数据隔离：admin 可见全部；普通用户仅见本人发起的记录（含 CLI 存量之外的过滤）
-  app.get('/api/reviews', (c) => {
+  // 数据隔离：admin 可见全部；普通用户仅见本人发起的记录，筛选与分页在数据库侧完成
+  app.get('/api/reviews', zValidator('query', ReviewListQuerySchema), (c) => {
     const current = c.get('user');
-    const reviews =
-      current.role === 'admin'
-        ? deps.store.listReviews()
-        : deps.store.listReviews({ createdBy: current.id });
-    return c.json({ reviews });
+    const queryParams = c.req.query();
+    const query = c.req.valid('query');
+    const page = deps.store.listReviewPage(query, current.role === 'admin' ? undefined : current.id);
+    // 保留无参数旧客户端的响应形状；显式分页参数使用完整分页契约。
+    if (Object.keys(queryParams).length === 0) return c.json({ reviews: page.reviews });
+    return c.json(page);
   });
 
-  app.get('/api/stats', (c) => {
+  app.get('/api/reviews/:id/diff', (c) => {
     const current = c.get('user');
-    return c.json({ stats: deps.store.getStats(current.role === 'admin' ? undefined : current.id) });
+    const reviewId = c.req.param('id');
+    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    try {
+      return c.json(ReviewDiffResponseSchema.parse({ diffText: deps.store.getDiff(reviewId) }));
+    } catch (e) {
+      if (e instanceof StoreError) return c.json({ error: e.message }, 404);
+      throw e;
+    }
+  });
+
+  app.post('/api/reviews/:id/rerun', (c) => {
+    const current = c.get('user');
+    const reviewId = c.req.param('id');
+    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    try {
+      return c.json({ reviewId: deps.service.rerunReview(reviewId, current.id) }, 202);
+    } catch (e) {
+      if (e instanceof StoreError) return c.json({ error: e.message }, 404);
+      throw e;
+    }
+  });
+
+  app.post('/api/reviews/:id/cancel', (c) => {
+    const current = c.get('user');
+    const reviewId = c.req.param('id');
+    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    if (!deps.service.cancelReview(reviewId)) return c.json({ error: 'review is not running' }, 409);
+    return c.json(CancelReviewResponseSchema.parse({ cancelled: true }));
+  });
+
+  app.delete('/api/reviews/:id', (c) => {
+    const current = c.get('user');
+    const reviewId = c.req.param('id');
+    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    return c.json(DeleteReviewResponseSchema.parse({ deleted: deps.store.deleteReview(reviewId) }));
+  });
+
+  app.get('/api/reviews/:id/export', (c) => {
+    const current = c.get('user');
+    const reviewId = c.req.param('id');
+    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    const format = c.req.query('format') ?? 'markdown';
+    if (format !== 'markdown' && format !== 'json' && format !== 'html') return c.json({ error: 'format must be markdown, html or json' }, 400);
+    try {
+      const report = deps.store.getReportDetail(reviewId);
+      const body = format === 'json' ? renderJson(report) : format === 'html' ? renderHtml(report) : renderMarkdown(report);
+      return c.body(body, 200, {
+        'content-type': format === 'json' ? 'application/json; charset=utf-8' : format === 'html' ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8',
+        'content-disposition': `attachment; filename="${reviewId}.${format === 'json' ? 'json' : format === 'html' ? 'html' : 'md'}"`,
+      });
+    } catch (e) {
+      if (e instanceof StoreError) return c.json({ error: e.message }, 404);
+      throw e;
+    }
+  });
+
+  app.get('/api/stats', zValidator('query', ReviewStatsQuerySchema), (c) => {
+    const current = c.get('user');
+    const query = c.req.valid('query');
+    return c.json({
+      stats: deps.store.getStats(
+        current.role === 'admin' ? undefined : current.id,
+        query,
+      ),
+    });
   });
 
   app.get('/api/reviews/:id', (c) => {
@@ -155,6 +243,9 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
 
     const queue = new EventQueue<ReviewStageEvent>();
     const unsubscribe = deps.service.subscribe(reviewId, (event) => queue.push(event));
+    // 订阅后再次检查，覆盖“任务刚完成、实时事件已广播但客户端尚未连接”的竞态窗口。
+    const terminal = deps.service.getTerminalEvent(reviewId);
+    if (terminal !== undefined) queue.push(terminal);
     c.req.raw.signal.addEventListener('abort', () => {
       unsubscribe();
       queue.close();
@@ -166,7 +257,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
         const event = await queue.next();
         if (event === undefined) break;
         await stream.writeSSE({ event: event.type, data: JSON.stringify(event) });
-        if (event.type === 'completed' || event.type === 'failed') {
+        if (event.type === 'completed' || event.type === 'failed' || event.type === 'cancelled') {
           // 终态事件即流结束；残余等待者由 close 唤醒
           unsubscribe();
           queue.close();
@@ -176,7 +267,37 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     });
   });
 
-  // —— 管理员后台（方案 3.10 用户管理/系统概览）——
+  // —— 管理员后台（配置、知识库、用户管理、系统概览）——
+  app.get('/api/admin/config', requireAdmin, (c) => {
+    const configPath = deps.configPath ?? '.ai-review.yml';
+    const config = readAdminConfig(configPath);
+    return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(config) }));
+  });
+
+  app.put('/api/admin/config', requireAdmin, zValidator('json', AdminConfigSchema), (c) => {
+    const config = c.req.valid('json');
+    const configPath = deps.configPath ?? '.ai-review.yml';
+    const current = readAdminConfig(configPath);
+    const persisted = config.llm.apiKey === '********'
+      ? { ...config, llm: { ...config.llm, apiKey: current.llm.apiKey } }
+      : config;
+    writeFileSync(configPath, stringifyYaml(persisted), 'utf8');
+    return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(persisted) }));
+  });
+
+  app.get('/api/admin/knowledge', requireAdmin, async (c) => {
+    const status = deps.knowledge === undefined
+      ? defaultKnowledgeStatus(deps.configPath ?? '.ai-review.yml')
+      : await deps.knowledge.getStatus();
+    return c.json(KnowledgeStatusResponseSchema.parse({ knowledge: status }));
+  });
+
+  app.post('/api/admin/knowledge/reindex', requireAdmin, (c) => {
+    if (deps.knowledge === undefined) return c.json({ error: 'knowledge manager is not configured' }, 503);
+    void deps.knowledge.reindex().catch(() => undefined);
+    return c.json(KnowledgeReindexResponseSchema.parse({ accepted: true }), 202);
+  });
+
   app.get('/api/admin/users', requireAdmin, (c) => {
     return c.json(UserListResponseSchema.parse({ users: deps.users.listUsers() }));
   });
@@ -222,6 +343,13 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const stats = deps.store.getStats();
     const cache = deps.store.getCacheSummary();
     const roleCounts = deps.users.getUserRoleCounts();
+    const recentFailures = deps.store.listReviewPage({ status: 'failed', page: 1, pageSize: 5 }).reviews.map((review) => ({
+      reviewId: review.reviewId,
+      repoPath: review.repoPath,
+      errorMessage: review.errorMessage,
+      createdAt: review.createdAt,
+    }));
+    const failedTotal = deps.store.listReviewPage({ status: 'failed', page: 1, pageSize: 1 }).total;
     return c.json(
       AdminOverviewResponseSchema.parse({
         overview: {
@@ -232,6 +360,13 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
           totalTokenUsed: stats.totalTokenUsed,
           cacheEntries: cache.entries,
           tokenSavedByCache: cache.tokenSaved,
+          failureRate: stats.totalReviews === 0 ? 0 : failedTotal / stats.totalReviews,
+          riskTrend: stats.riskTrend.filter((point) => {
+            const cutoff = new Date();
+            cutoff.setDate(cutoff.getDate() - 6);
+            return point.date >= cutoff.toISOString().slice(0, 10);
+          }),
+          recentFailures,
         },
       }),
     );
@@ -245,12 +380,48 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   return app;
 }
 
+function readAdminConfig(path: string): ReturnType<typeof AiReviewConfigSchema.parse> {
+  if (!existsSync(path)) return AiReviewConfigSchema.parse({});
+  const parsed = parseYaml(readFileSync(path, 'utf8')) as unknown;
+  return AiReviewConfigSchema.parse(parsed);
+}
+
+function maskApiKey(config: ReturnType<typeof AiReviewConfigSchema.parse>): ReturnType<typeof AiReviewConfigSchema.parse> {
+  const apiKey = config.llm.apiKey;
+  return {
+    ...config,
+    llm: {
+      ...config.llm,
+      apiKey: /^\$\{[A-Z0-9_]+\}$/.test(apiKey) ? apiKey : '********',
+    },
+  };
+}
+
+function defaultKnowledgeStatus(configPath: string): {
+  status: 'disabled' | 'idle';
+  indexDir: string;
+  chunkCount: number;
+  paths: string[];
+  lastIndexedAt: string | null;
+  error: string | null;
+} {
+  const config = readAdminConfig(configPath);
+  return {
+    status: config.rag.enabled ? 'idle' : 'disabled',
+    indexDir: config.rag.indexDir,
+    chunkCount: 0,
+    paths: config.rag.knowledgeBasePaths,
+    lastIndexedAt: null,
+    error: null,
+  };
+}
+
 /** 审查归属校验：非本人且非 admin 一律按不存在处理（避免探测有效审查 ID） */
 function canAccessReview(
-  deps: Pick<AppDeps, 'store'>,
+  deps: Pick<AppDeps, 'store' | 'service'>,
   current: SafeUser,
   reviewId: string,
 ): boolean {
   if (current.role === 'admin') return true;
-  return deps.store.getReviewOwner(reviewId) === current.id;
+  return deps.store.getReviewOwner(reviewId) === current.id || deps.service.getReviewOwner(reviewId) === current.id;
 }

@@ -1,3 +1,5 @@
+export * from './ast-parse.js';
+export * from './dependency-scan.js';
 export * from './complexity.js';
 export * from './secret-scan.js';
 export * from './mcp-server.js';

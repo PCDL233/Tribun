@@ -15,7 +15,7 @@ export const reviews = sqliteTable('reviews', {
   /** 如 "mock + 静态分析" */
   model: text('model').notNull(),
   mode: text('mode', { enum: ['fast', 'full'] }).notNull(),
-  status: text('status', { enum: ['completed', 'failed'] })
+  status: text('status', { enum: ['completed', 'failed', 'cancelled'] })
     .notNull()
     .default('completed'),
   /** 0-100 综合风险评分（Risk Planner 输出的最大文件风险分） */

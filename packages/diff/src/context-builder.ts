@@ -139,6 +139,8 @@ export class DiffContextBuilder {
     private readonly contextRadius = 50,
     /** CI 区间模式（方案 3.11 `run --base <ref>`）；undefined 表示默认暂存区模式 */
     private readonly baseRef?: string,
+    /** RAG 召回数量；由 .ai-review.yml 的 rag.topK 注入 */
+    private readonly ragTopK = 5,
   ) {}
 
   /**
@@ -171,7 +173,7 @@ export class DiffContextBuilder {
       astContext.snippet || getLineWindow(newSideContent, diff.changedLines, this.contextRadius);
     const ragHits = await this.rag.query({
       query: diff.summary,
-      topK: 5,
+      topK: this.ragTopK,
       filter: { path: diff.path },
     });
     return {

@@ -21,7 +21,7 @@ describe('tools MCP server (方案 3.4 工具对外暴露)', () => {
     await client.connect(clientTransport);
 
     const tools = await client.listTools();
-    expect(tools.tools.map((tool) => tool.name).sort()).toEqual(['complexity_check', 'secret_scan']);
+    expect(tools.tools.map((tool) => tool.name).sort()).toEqual(['ast_parse', 'complexity_check', 'dependency_scan', 'secret_scan']);
 
     await client.close();
     await server.close();

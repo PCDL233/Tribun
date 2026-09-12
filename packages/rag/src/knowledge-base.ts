@@ -59,6 +59,26 @@ export class KnowledgeBase implements RagRetriever {
   ) {}
 
   /**
+   * 打开已有索引并重建 BM25 内存索引。
+   * 仅加载 LanceDB 元数据和文本，不触发嵌入服务；未建立索引时返回 0。
+   */
+  public async open(): Promise<number> {
+    const db = await lancedb.connect(this.indexDir);
+    const tables = await db.tableNames();
+    if (!tables.includes('chunks')) return 0;
+    const table = await db.openTable('chunks');
+    const rows = (await table.query().select(['id', 'path', 'kind', 'text']).toArray()) as Array<{
+      id: string;
+      path: string;
+      kind: string;
+      text: string;
+    }>;
+    this.table = table;
+    this.rebuildBm25(rows);
+    return rows.length;
+  }
+
+  /**
    * 构建/增量更新索引。重复调用是安全的：内容哈希未变的块不重复向量化。
    * @param paths 文件或目录路径列表（目录递归，仅收录文本扩展名）
    */

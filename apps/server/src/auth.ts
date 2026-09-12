@@ -2,7 +2,7 @@ import { randomBytes, scrypt as scryptCallback, timingSafeEqual } from 'node:cry
 import { promisify } from 'node:util';
 import { deleteCookie, getCookie, setCookie } from 'hono/cookie';
 import { createMiddleware } from 'hono/factory';
-import type { Context, Hono } from 'hono';
+import type { Context, Hono, MiddlewareHandler } from 'hono';
 import { zValidator } from '@hono/zod-validator';
 import { StoreError, type SafeUser, type UserStore } from '@ai-review/db';
 import {
@@ -52,7 +52,7 @@ export interface AuthDeps {
 }
 
 /** requireAuth 中间件工厂：校验 Cookie 会话，通过后把 SafeUser 写入 Context 变量 */
-export function createRequireAuth(deps: AuthDeps) {
+export function createRequireAuth(deps: AuthDeps): MiddlewareHandler<AppEnv> {
   return createMiddleware<AppEnv>(async (c, next) => {
     const token = getCookie(c, SESSION_COOKIE);
     if (token === undefined || token === '') {

@@ -2,6 +2,7 @@ import { getMaxRiskScore, runReviewPipeline } from '@ai-review/core';
 import type { PipelineDeps, PipelineNodeName, ReviewState } from '@ai-review/core';
 import type { ReviewStore } from '@ai-review/db';
 import { severityMeetsThreshold } from '@ai-review/shared';
+import { deriveQualityNotes, deriveSuggestions } from '@ai-review/report';
 import type { ReviewReport, ReviewStageEvent, Severity } from '@ai-review/shared';
 import type { ReviewMetrics } from './metrics.js';
 
@@ -34,7 +35,7 @@ export type StartReviewOptions = {
   createdBy?: string;
 };
 
-/** 组装流水线依赖（当前为 mock provider；真实 Provider 链接入后在此替换） */
+/** 组装流水线依赖；Provider 链由配置选择云端、本地 Ollama 与 mock 保底。 */
 export type PipelineDepsFactory = (repoPath: string, mode: 'fast' | 'full') => PipelineDeps;
 
 /** 允许测试注入假流水线；生产即 @ai-review/core 的 runReviewPipeline */
@@ -46,7 +47,10 @@ export type PipelineRunner = typeof runReviewPipeline;
  */
 export class ReviewService {
   private jobSeq = 0;
+  private readonly controllers = new Map<string, AbortController>();
+  private readonly jobs = new Map<string, StartReviewOptions>();
   private readonly listeners = new Map<string, Set<(event: ReviewStageEvent) => void>>();
+  private readonly terminalEvents = new Map<string, ReviewStageEvent>();
 
   constructor(
     private readonly store: ReviewStore,
@@ -63,14 +67,59 @@ export class ReviewService {
     this.jobSeq += 1;
     const reviewId = `review-${Date.now()}-${this.jobSeq}`;
     // 后台执行：失败不抛给调用方，经 'failed' 事件与订阅者约定（规范 §7.4 转译而非静默）
-    void this.runJob(reviewId, options);
+    const controller = new AbortController();
+    this.controllers.set(reviewId, controller);
+    this.jobs.set(reviewId, options);
+    void this.runJob(reviewId, options, controller);
     return reviewId;
   }
 
-  /**
-   * 订阅某次审查的进度事件。
-   * @returns 取消订阅函数
-   */
+  /** 取消运行中的审查；任务已进入终态时返回 false。 */
+  public cancelReview(reviewId: string): boolean {
+    const controller = this.controllers.get(reviewId);
+    if (controller === undefined || controller.signal.aborted) return false;
+    controller.abort();
+    return true;
+  }
+
+  /** 查询运行中任务的归属；用于 SSE/取消在报告落库前的访问控制。 */
+  public getReviewOwner(reviewId: string): string | null {
+    return this.jobs.get(reviewId)?.createdBy ?? null;
+  }
+
+  /** 返回已落库任务的终态事件，避免客户端晚连接 SSE 后永久等待。 */
+  public getTerminalEvent(reviewId: string): ReviewStageEvent | undefined {
+    const remembered = this.terminalEvents.get(reviewId);
+    if (remembered !== undefined) return remembered;
+    try {
+      const report = this.store.getReportDetail(reviewId);
+      const status = report.meta.status ?? 'completed';
+      if (status === 'failed' || status === 'cancelled') {
+        return {
+          type: status,
+          reviewId,
+          message: report.meta.errorMessage ?? report.assessment,
+        };
+      }
+      return {
+        type: 'completed',
+        reviewId,
+        riskScore: report.meta.riskScore,
+        blockerCount: report.findings.filter((finding) => finding.severity === 'BLOCKER' && !finding.isFalsePositive).length,
+        blocking: report.findings.some((finding) => severityMeetsThreshold(finding.severity, 'BLOCKER')),
+      };
+    } catch {
+      // 运行中的任务尚未落库；订阅者会从实时广播中收到终态事件。
+      return undefined;
+    }
+  }
+
+  /** 使用原审查的仓库与模式创建新任务。 */
+  public rerunReview(reviewId: string, createdBy?: string): string {
+    const input = this.store.getReviewInput(reviewId);
+    return this.startReview({ repoPath: input.repoPath, mode: input.mode, ...(createdBy === undefined ? {} : { createdBy }) });
+  }
+
   public subscribe(reviewId: string, listener: (event: ReviewStageEvent) => void): () => void {
     const set = this.listeners.get(reviewId) ?? new Set<(event: ReviewStageEvent) => void>();
     set.add(listener);
@@ -82,24 +131,43 @@ export class ReviewService {
   }
 
   private emit(event: ReviewStageEvent): void {
+    if (event.type !== 'stage') {
+      this.terminalEvents.set(event.reviewId, event);
+      // 仅保留最近 1,000 条终态，避免长时间运行的服务发生无界内存增长。
+      if (this.terminalEvents.size > 1000) {
+        const oldest = this.terminalEvents.keys().next().value;
+        if (oldest !== undefined) this.terminalEvents.delete(oldest);
+      }
+    }
     for (const listener of this.listeners.get(event.reviewId) ?? []) {
       listener(event);
     }
   }
 
-  private async runJob(reviewId: string, options: StartReviewOptions): Promise<void> {
-    const deps = this.depsFactory(options.repoPath, options.mode);
+  private async runJob(
+    reviewId: string,
+    options: StartReviewOptions,
+    controller: AbortController,
+  ): Promise<void> {
     try {
+      const deps = this.depsFactory(options.repoPath, options.mode);
       const state = await this.runner(deps, {
         reviewId,
-        onNodeUpdate: (node) => {
+        signal: controller.signal,
+        onNodeUpdate: (node, update) => {
           if (isPipelineNodeName(node)) {
-            this.emit({ type: 'stage', reviewId, stage: node });
+            const detail = typeof update === 'object' && update !== null
+              ? JSON.stringify(update).slice(0, 240)
+              : undefined;
+            this.emit({ type: 'stage', reviewId, stage: node, ...(detail === undefined ? {} : { detail }) });
           }
         },
       });
+      if (controller.signal.aborted) {
+        throw new DOMException('The review was cancelled', 'AbortError');
+      }
       const report = await this.buildReport(reviewId, options, deps, state);
-      this.store.saveReport(report, options.createdBy);
+      this.store.saveReport(report, options.createdBy, { diffText: state.rawDiff });
       this.metrics?.recordCompleted(report);
       const blockerCount = report.findings.filter(
         (finding) => finding.severity === 'BLOCKER' && !finding.isFalsePositive,
@@ -114,12 +182,23 @@ export class ReviewService {
         ),
       });
     } catch (e) {
+      const cancelled = controller.signal.aborted || (e instanceof DOMException && e.name === 'AbortError');
+      const message = cancelled ? '审查已取消' : e instanceof Error ? e.message : String(e);
       this.metrics?.recordFailed();
-      this.emit({
-        type: 'failed',
-        reviewId,
-        message: e instanceof Error ? e.message : String(e),
-      });
+      const status = cancelled ? 'cancelled' as const : 'failed' as const;
+      const failureReport: ReviewReport = {
+        meta: {
+          reviewId, repoPath: options.repoPath, branch: '—', model: '未完成', mode: options.mode,
+          status, errorMessage: message, riskScore: 0, durationMs: 0, tokenUsed: 0,
+        },
+        summary: cancelled ? '审查任务已取消。' : '审查任务执行失败。',
+        findings: [], qualityNotes: [], suggestions: [], assessment: message, degradedToStatic: [],
+      };
+      this.store.saveReport(failureReport, options.createdBy, { errorMessage: message });
+      this.emit({ type: cancelled ? 'cancelled' : 'failed', reviewId, message });
+    } finally {
+      this.controllers.delete(reviewId);
+      this.jobs.delete(reviewId);
     }
   }
 
@@ -134,24 +213,30 @@ export class ReviewService {
       severityMeetsThreshold(finding.severity, options.blockOn ?? 'BLOCKER'),
     );
     const branch = (await deps.gitReader.readBranch()).trim() || 'HEAD';
+    const suggestions = deriveSuggestions(state.findings);
+    const qualityNotes = deriveQualityNotes(
+      state.context.metadata.totalFiles,
+      state.findings,
+      state.metrics.degradedToStatic,
+    );
     return {
       meta: {
         reviewId,
         repoPath: options.repoPath,
         branch,
-        model: 'mock + 静态分析',
+        model: deps.modelName ?? 'mock + 静态分析',
         mode: options.mode,
         riskScore: getMaxRiskScore(state.plan),
         durationMs: state.metrics.durationMs,
         tokenUsed: state.metrics.totalTokens,
       },
-      summary: `Reviewed ${state.context.metadata.totalFiles} staged file(s).`,
+      summary: `本次审查覆盖 ${state.context.metadata.totalFiles} 个文件，发现 ${state.findings.length} 个问题。`,
       findings: state.findings,
-      qualityNotes: [],
-      suggestions: [],
+      qualityNotes,
+      suggestions,
       assessment: blocking
-        ? 'Changes should not be committed until blocking findings are addressed.'
-        : 'No findings reached the configured blocking threshold.',
+        ? '存在达到阻断阈值的发现。Changes should not be committed until blocking findings are addressed.'
+        : '未发现达到当前阻断阈值的问题。No findings reached the configured blocking threshold.',
       degradedToStatic: state.metrics.degradedToStatic,
     };
   }

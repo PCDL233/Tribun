@@ -1,6 +1,8 @@
 import type { CodeContext, Finding } from '@ai-review/shared';
 import { complexityFindings } from './complexity.js';
 import { scanSecrets } from './secret-scan.js';
+import { dependencyFindings } from './dependency-scan.js';
+import { astFindings } from './ast-parse.js';
 
 /**
  * 进程内静态分析工具（方案 3.4 工具总线）。
@@ -43,7 +45,7 @@ export class ToolRegistry {
 export const DEFAULT_COMPLEXITY_THRESHOLD = 15;
 
 /**
- * 装配默认工具集：complexity_check + secret_scan（配置 staticAnalysis.enabledTools 的默认集合）。
+ * 装配默认工具集：AST、复杂度、密钥与离线依赖 advisory 检查。
  * @param options 复杂度阈值等工具参数
  * @returns 含默认工具的注册表
  */
@@ -53,6 +55,11 @@ export function buildDefaultRegistry(options?: {
   const threshold = options?.complexityThreshold ?? DEFAULT_COMPLEXITY_THRESHOLD;
   const registry = new ToolRegistry();
   registry.register({
+    name: 'ast_parse',
+    description: 'Parse changed JS/TS files and detect syntax errors or empty catch blocks.',
+    run: (context) => astFindings(context.files),
+  });
+  registry.register({
     name: 'complexity_check',
     description: 'List functions whose cyclomatic complexity exceeds the threshold.',
     run: (context) => complexityFindings(context.files, threshold),
@@ -61,6 +68,11 @@ export function buildDefaultRegistry(options?: {
     name: 'secret_scan',
     description: 'Detect hardcoded secrets and credentials in changed lines.',
     run: (context) => scanSecrets(context.files),
+  });
+  registry.register({
+    name: 'dependency_scan',
+    description: 'Check changed package manifests against the bundled offline advisory set.',
+    run: (context) => dependencyFindings(context.files),
   });
   return registry;
 }

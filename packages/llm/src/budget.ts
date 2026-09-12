@@ -5,6 +5,8 @@
  */
 export class TokenBudget {
   private used = 0;
+  /** 尚未由真实 usage 抵扣的预留估算，保证并行/多文件审查不会突破上限。 */
+  private reserved = 0;
 
   constructor(
     private readonly max: number,
@@ -17,23 +19,26 @@ export class TokenBudget {
    * @returns 是否允许消耗
    */
   public tryReserve(estimate: number): boolean {
-    if (this.used + estimate > this.max) {
+    if (estimate < 0 || this.used + this.reserved + estimate > this.max) {
       this.onExhausted?.();
       return false;
     }
+    this.reserved += estimate;
     return true;
   }
 
   /**
-   * 按真实用量记账（AI SDK usage 统计）。
+   * 按真实用量记账（AI SDK usage 统计）。真实用量会优先抵扣未结算的估算预留。
    * @param usage 模型返回的 usage
    */
   public account(usage: { totalTokens: number }): void {
+    if (usage.totalTokens < 0) return;
     this.used += usage.totalTokens;
+    this.reserved = Math.max(0, this.reserved - usage.totalTokens);
   }
 
-  /** 已消耗比例（0-1），供报告与 Dashboard 展示 */
+  /** 已消耗/已预留比例（0-1），供报告与 Dashboard 展示 */
   public get usageRatio(): number {
-    return this.used / this.max;
+    return Math.min(1, (this.used + this.reserved) / this.max);
   }
 }

@@ -2,7 +2,9 @@ import { readFile } from 'node:fs/promises';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { analyzeAst } from './ast-parse.js';
 import { analyzeComplexity } from './complexity.js';
+import { scanDependencyManifest } from './dependency-scan.js';
 import { scanDiffTextForSecrets } from './secret-scan.js';
 
 /**
@@ -13,10 +15,26 @@ import { scanDiffTextForSecrets } from './secret-scan.js';
 
 /**
  * 组装 MCP Server（未连接传输层，测试用 InMemoryTransport 注入）。
- * 工具名与方案 3.4 工具清单一致：complexity_check / secret_scan。
+ * 工具名与方案 3.4 工具清单一致：ast_parse / complexity_check / dependency_scan / secret_scan。
  */
 export function buildToolsMcpServer(): McpServer {
   const server = new McpServer({ name: 'ai-review-tools', version: '1.0.0' });
+
+  server.registerTool(
+    'ast_parse',
+    {
+      title: 'AST parse',
+      description: 'Parse a JavaScript or TypeScript file and return functions, classes, imports, and syntax diagnostics.',
+      inputSchema: {
+        file_path: z.string().describe('Absolute or cwd-relative path of the source file'),
+      },
+    },
+    async ({ file_path }) => {
+      const source = await readFile(file_path, 'utf8');
+      const result = analyzeAst(source, file_path);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    },
+  );
 
   server.registerTool(
     'complexity_check',
@@ -31,6 +49,22 @@ export function buildToolsMcpServer(): McpServer {
     async ({ file_path, threshold }) => {
       const source = await readFile(file_path, 'utf8');
       const result = analyzeComplexity(source, threshold ?? 15);
+      return { content: [{ type: 'text', text: JSON.stringify(result) }] };
+    },
+  );
+
+  server.registerTool(
+    'dependency_scan',
+    {
+      title: 'Dependency advisory scan',
+      description: 'Check a package.json manifest against the bundled offline dependency advisory set.',
+      inputSchema: {
+        file_path: z.string().describe('Absolute or cwd-relative path to package.json'),
+      },
+    },
+    async ({ file_path }) => {
+      const source = await readFile(file_path, 'utf8');
+      const result = scanDependencyManifest(source, file_path);
       return { content: [{ type: 'text', text: JSON.stringify(result) }] };
     },
   );

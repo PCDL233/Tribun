@@ -261,6 +261,9 @@ describe('review REST API', () => {
       body: JSON.stringify({ mode: 'ultra' }),
     });
     expect(bad.status).toBe(400);
+
+    const invalidQuery = await app.request('/api/reviews?page=0', { headers: auth(cookie) });
+    expect(invalidQuery.status).toBe(400);
   });
 });
 
@@ -424,6 +427,17 @@ describe('admin privilege isolation', () => {
         })
       ).status,
     ).toBe(404);
+  });
+
+  it('returns a client error for invalid admin configuration payloads', async () => {
+    const app = makeHarness(async () => makeState());
+    const admin = await registerUser(app, 'boss');
+    const response = await app.request('/api/admin/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...auth(admin.cookie) },
+      body: JSON.stringify({ llm: { provider: 'not-a-provider' } }),
+    });
+    expect(response.status).toBe(400);
   });
 
   it('serves the admin overview aggregation', async () => {
@@ -625,6 +639,21 @@ describe('SSE progress stream', () => {
     expect(body).toContain('"type":"stage"');
     expect(body).toContain('event: completed');
     expect(body).toContain('"blocking":true');
+  });
+
+  it('replays a terminal event when the client connects after completion', async () => {
+    const app = makeHarness(async () => makeState());
+    const { cookie } = await registerUser(app, 'boss');
+    const reviewId = await startReview(app, cookie);
+
+    await vi.waitFor(async () => {
+      const detail = await app.request(`/api/reviews/${reviewId}`, { headers: auth(cookie) });
+      expect(detail.status).toBe(200);
+    });
+
+    const body = await (await app.request(`/api/reviews/${reviewId}/events`, { headers: auth(cookie) })).text();
+    expect(body).toContain('event: completed');
+    expect(body).toContain(`"reviewId":"${reviewId}"`);
   });
 
   it('streams the failed event when the pipeline throws', async () => {

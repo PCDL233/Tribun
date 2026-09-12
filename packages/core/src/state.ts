@@ -60,6 +60,8 @@ const metricsChannel = Annotation<ReviewMetrics>({
  */
 export const reviewStateAnnotation = Annotation.Root({
   context: Annotation<CodeContext>({ reducer: (_, b) => b, default: emptyContext }),
+  /** 原始 unified diff，用于报告详情的 Diff 视图与导出；大于 2MB 由持久层截断。 */
+  rawDiff: Annotation<string>({ reducer: (_, b) => b, default: () => '' }),
   plan: Annotation<ReviewPlan>({ reducer: (_, b) => b, default: emptyPlan }),
   findings: findingList,
   healRounds: Annotation<number>({ reducer: (_, b) => b, default: () => 0 }),

@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { FindingSchema } from './finding.js';
+import { AiReviewConfigSchema } from './config-schema.js';
 import { ReviewReportSchema } from './report.js';
 
 // 认证/用户契约无 node 依赖，随 api 子路径一并供浏览器端消费
@@ -87,6 +88,7 @@ export const ReviewStageEventSchema = z.discriminatedUnion('type', [
     blocking: z.boolean(),
   }),
   z.object({ type: z.literal('failed'), reviewId: z.string(), message: z.string() }),
+  z.object({ type: z.literal('cancelled'), reviewId: z.string(), message: z.string() }),
 ]);
 export type ReviewStageEvent = z.infer<typeof ReviewStageEventSchema>;
 
@@ -140,6 +142,25 @@ export const RiskyFileSchema = z.object({
 });
 export type RiskyFile = z.infer<typeof RiskyFileSchema>;
 
+/** GET /api/stats 查询范围；日期按 UTC 自然日闭区间处理。 */
+export const ReviewStatsQuerySchema = z.object({
+  from: z.string().trim().min(1).optional(),
+  to: z.string().trim().min(1).optional(),
+});
+export type ReviewStatsQuery = z.infer<typeof ReviewStatsQuerySchema>;
+
+export const AgentCountSchema = z.object({
+  agent: z.string(),
+  count: z.number().int().nonnegative(),
+});
+export type AgentCount = z.infer<typeof AgentCountSchema>;
+
+export const TokenTrendPointSchema = z.object({
+  date: z.string(),
+  tokenUsed: z.number().int().nonnegative(),
+});
+export type TokenTrendPoint = z.infer<typeof TokenTrendPointSchema>;
+
 /** GET /api/stats 响应体（空库时所有计数为 0、均值与趋势为空数组） */
 export const ReviewStatsSchema = z.object({
   totalReviews: z.number().int().nonnegative(),
@@ -153,8 +174,34 @@ export const ReviewStatsSchema = z.object({
   /** 按日期升序的风险分趋势 */
   riskTrend: z.array(RiskTrendPointSchema),
   topRiskyFiles: z.array(RiskyFileSchema),
+  /** 各审查 agent 产出的发现数量 */
+  agentDistribution: z.array(AgentCountSchema),
+  /** 按自然日聚合的 token 消耗 */
+  tokenTrend: z.array(TokenTrendPointSchema),
 });
 export type ReviewStats = z.infer<typeof ReviewStatsSchema>;
 
 /** GET /api/stats */
 export const ReviewStatsResponseSchema = z.object({ stats: ReviewStatsSchema });
+
+/** 管理后台配置读写契约；API key 只允许环境变量引用或由服务端返回的掩码。 */
+export const AdminConfigSchema = AiReviewConfigSchema.superRefine((config, ctx) => {
+  if (config.llm.apiKey !== '********' && !/^\$\{[A-Z0-9_]+\}$/.test(config.llm.apiKey)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['llm', 'apiKey'], message: 'apiKey must be an environment variable reference such as ${AI_REVIEW_API_KEY}' });
+  }
+});
+export const AdminConfigResponseSchema = z.object({ config: AiReviewConfigSchema });
+export type AdminConfig = z.infer<typeof AiReviewConfigSchema>;
+export type AdminConfigResponse = z.infer<typeof AdminConfigResponseSchema>;
+
+export const KnowledgeStatusSchema = z.object({
+  status: z.enum(['disabled', 'idle', 'ready', 'running', 'error']),
+  indexDir: z.string(),
+  chunkCount: z.number().int().nonnegative(),
+  paths: z.array(z.string()),
+  lastIndexedAt: z.string().nullable(),
+  error: z.string().nullable(),
+});
+export type KnowledgeStatus = z.infer<typeof KnowledgeStatusSchema>;
+export const KnowledgeStatusResponseSchema = z.object({ knowledge: KnowledgeStatusSchema });
+export const KnowledgeReindexResponseSchema = z.object({ accepted: z.boolean() });

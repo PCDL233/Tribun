@@ -1,12 +1,13 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
-import { and, asc, count, desc, eq, gte, like, lte, or } from 'drizzle-orm';
+import { and, desc, eq, gte, like, lte, or } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { z } from 'zod';
 import { FindingSchema } from '@ai-review/shared';
 import type {
+  AgentCount,
   Finding,
   IdentifiedFinding,
   ReviewListItem,
@@ -15,6 +16,7 @@ import type {
   ReviewReportDetail,
   ReviewStats,
   SeverityCount,
+  TokenTrendPoint,
 } from '@ai-review/shared';
 import { findings, reviewCache, reviews } from './schema.js';
 
@@ -144,7 +146,11 @@ export class ReviewStore {
    * @param createdBy 发起人用户 id（Web 端触发时记录，用于数据隔离；CLI 直跑时缺省）
    * @returns 审查 ID（即 report.meta.reviewId）
    */
-  public saveReport(report: ReviewReport, createdBy?: string): string {
+  public saveReport(
+    report: ReviewReport,
+    createdBy?: string,
+    options: { diffText?: string | null; errorMessage?: string | null } = {},
+  ): string {
     const reviewId = report.meta.reviewId;
     const count = (severity: string): number =>
       report.findings.filter((finding) => finding.severity === severity).length;
@@ -160,6 +166,7 @@ export class ReviewStore {
           author: report.meta.author,
           model: report.meta.model,
           mode: report.meta.mode,
+          status: report.meta.status ?? 'completed',
           riskScore: report.meta.riskScore,
           totalFindings: report.findings.length,
           blockerCount: count('BLOCKER'),
@@ -168,6 +175,8 @@ export class ReviewStore {
           tokenUsed: report.meta.tokenUsed,
           durationMs: report.meta.durationMs,
           createdBy: createdBy ?? null,
+          diffText: options.diffText === undefined ? null : options.diffText?.slice(0, 2 * 1024 * 1024) ?? null,
+          errorMessage: options.errorMessage ?? report.meta.errorMessage ?? null,
           reportJson: JSON.stringify({
             summary: report.summary,
             qualityNotes: report.qualityNotes,
@@ -223,6 +232,8 @@ export class ReviewStore {
       branch: row.branch,
       model: row.model,
       mode: row.mode,
+      status: row.status,
+      errorMessage: row.errorMessage,
       riskScore: row.riskScore,
       totalFindings: row.totalFindings,
       blockerCount: row.blockerCount,
@@ -233,6 +244,97 @@ export class ReviewStore {
       createdAt: row.createdAt,
       createdBy: row.createdBy,
     }));
+  }
+
+  /** 服务端分页查询；保留 listReviews 的旧数组 API 供 CLI 与既有调用方使用。 */
+  public listReviewPage(
+    query: ReviewListQuery,
+    createdBy?: string,
+  ): { reviews: ReviewListItem[]; total: number; page: number; pageSize: number } {
+    const filters = [
+      createdBy === undefined ? undefined : eq(reviews.createdBy, createdBy),
+      query.status === undefined ? undefined : eq(reviews.status, query.status),
+      query.mode === undefined ? undefined : eq(reviews.mode, query.mode),
+      query.repo === undefined ? undefined : like(reviews.repoPath, `%${query.repo}%`),
+      query.branch === undefined ? undefined : like(reviews.branch, `%${query.branch}%`),
+      query.from === undefined ? undefined : gte(reviews.createdAt, query.from),
+      query.to === undefined ? undefined : lte(reviews.createdAt, query.to.length === 10 ? `${query.to}T23:59:59.999Z` : query.to),
+      query.q === undefined
+        ? undefined
+        : or(
+            like(reviews.repoPath, `%${query.q}%`),
+            like(reviews.branch, `%${query.q}%`),
+            like(reviews.id, `%${query.q}%`),
+          ),
+      query.severity === 'BLOCKER' ? gte(reviews.blockerCount, 1) : undefined,
+      query.severity === 'WARNING' ? gte(reviews.warningCount, 1) : undefined,
+      query.severity === 'NIT' ? gte(reviews.nitCount, 1) : undefined,
+    ];
+    const where = and(...filters);
+    const totalRow = this.db.select({ id: reviews.id }).from(reviews).where(where).all();
+    const rows = this.db
+      .select()
+      .from(reviews)
+      .where(where)
+      .orderBy(desc(reviews.createdAt), desc(reviews.id))
+      .limit(query.pageSize)
+      .offset((query.page - 1) * query.pageSize)
+      .all();
+    return {
+      reviews: rows.map((row) => ({
+        reviewId: row.id,
+        repoPath: row.repoPath,
+        branch: row.branch,
+        model: row.model,
+        mode: row.mode,
+        status: row.status,
+        errorMessage: row.errorMessage,
+        riskScore: row.riskScore,
+        totalFindings: row.totalFindings,
+        blockerCount: row.blockerCount,
+        warningCount: row.warningCount,
+        nitCount: row.nitCount,
+        tokenUsed: row.tokenUsed,
+        durationMs: row.durationMs,
+        createdAt: row.createdAt,
+        createdBy: row.createdBy,
+      })),
+      total: totalRow.length,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
+  }
+
+  /** 读取审查输入，供服务端重跑时复用原始仓库与模式。 */
+  public getReviewInput(reviewId: string): { repoPath: string; mode: 'fast' | 'full'; createdBy: string | null } {
+    const row = this.db
+      .select({ repoPath: reviews.repoPath, mode: reviews.mode, createdBy: reviews.createdBy })
+      .from(reviews)
+      .where(eq(reviews.id, reviewId))
+      .get();
+    if (row === undefined) throw new StoreError(`review not found: ${reviewId}`);
+    return { repoPath: row.repoPath, mode: row.mode, createdBy: row.createdBy };
+  }
+
+  /** 读取原始 diff；旧记录没有持久化 diff 时返回 null。 */
+  public getDiff(reviewId: string): string | null {
+    const row = this.db
+      .select({ diffText: reviews.diffText })
+      .from(reviews)
+      .where(eq(reviews.id, reviewId))
+      .get();
+    if (row === undefined) throw new StoreError(`review not found: ${reviewId}`);
+    return row.diffText;
+  }
+
+  /** 删除审查及其发现，显式级联以兼容存量库没有外键级联的情况。 */
+  public deleteReview(reviewId: string): boolean {
+    const transaction = this.sqlite.transaction(() => {
+      this.db.delete(findings).where(eq(findings.reviewId, reviewId)).run();
+      const result = this.db.delete(reviews).where(eq(reviews.id, reviewId)).run();
+      return result.changes > 0;
+    });
+    return transaction();
   }
 
   /**
@@ -283,6 +385,8 @@ export class ReviewStore {
         author: row.author ?? undefined,
         model: row.model,
         mode: row.mode,
+        status: row.status,
+        errorMessage: row.errorMessage ?? undefined,
         riskScore: row.riskScore,
         durationMs: row.durationMs,
         tokenUsed: row.tokenUsed,
@@ -407,30 +511,41 @@ export class ReviewStore {
    * 避免 SQLite 字符串日期聚合的方言耦合。
    * @param createdBy 数据隔离过滤：普通用户仅统计本人数据（admin 省略此参数）
    */
-  public getStats(createdBy?: string): ReviewStats {
+  public getStats(createdBy?: string, range?: { from?: string | undefined; to?: string | undefined }): ReviewStats {
+    const conditions = [
+      ...(createdBy === undefined ? [] : [eq(reviews.createdBy, createdBy)]),
+      ...(range?.from === undefined ? [] : [gte(reviews.createdAt, `${range.from}T00:00:00.000Z`)]),
+      ...(range?.to === undefined ? [] : [lte(reviews.createdAt, `${range.to}T23:59:59.999Z`)]),
+    ];
     const reviewRows = this.db
       .select()
       .from(reviews)
-      .where(createdBy === undefined ? undefined : eq(reviews.createdBy, createdBy))
+      .where(conditions.length === 0 ? undefined : and(...conditions))
       .all();
+    const reviewIds = new Set(reviewRows.map((row) => row.id));
     const findingRows = this.db
       .select({
+        reviewId: findings.reviewId,
+        agent: findings.agent,
         filePath: findings.filePath,
         severity: findings.severity,
         isFalsePositive: findings.isFalsePositive,
       })
       .from(findings)
       .innerJoin(reviews, eq(findings.reviewId, reviews.id))
-      .where(createdBy === undefined ? undefined : eq(reviews.createdBy, createdBy))
-      .all();
+      .where(conditions.length === 0 ? undefined : and(...conditions))
+      .all()
+      .filter((row) => reviewIds.has(row.reviewId));
 
     const severityCounts = new Map<string, number>();
+    const agentCounts = new Map<string, number>();
     const fileCounts = new Map<string, { findingCount: number; blockerCount: number }>();
     let falsePositiveCount = 0;
     for (const row of findingRows) {
       // is_false_positive 列为 drizzle boolean 模式，读回即 true/false
       if (row.isFalsePositive) falsePositiveCount += 1;
       severityCounts.set(row.severity, (severityCounts.get(row.severity) ?? 0) + 1);
+      agentCounts.set(row.agent, (agentCounts.get(row.agent) ?? 0) + 1);
       const file = fileCounts.get(row.filePath) ?? { findingCount: 0, blockerCount: 0 };
       file.findingCount += 1;
       if (row.severity === 'BLOCKER') file.blockerCount += 1;
@@ -460,6 +575,17 @@ export class ReviewStore {
         reviews: bucket.reviews,
         avgRiskScore: bucket.riskScoreSum / bucket.reviews,
       }));
+    const tokenByDate = new Map<string, number>();
+    for (const row of reviewRows) {
+      const date = row.createdAt.slice(0, 10);
+      tokenByDate.set(date, (tokenByDate.get(date) ?? 0) + row.tokenUsed);
+    }
+    const tokenTrend: TokenTrendPoint[] = [...tokenByDate.entries()]
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, tokenUsed]) => ({ date, tokenUsed }));
+    const agentDistribution: AgentCount[] = [...agentCounts.entries()]
+      .sort(([, a], [, b]) => b - a)
+      .map(([agent, count]) => ({ agent, count }));
 
     const totalReviews = reviewRows.length;
     const avgRiskScore =
@@ -483,6 +609,8 @@ export class ReviewStore {
         .map(([filePath, file]) => ({ filePath, ...file }))
         .sort((a, b) => b.findingCount - a.findingCount)
         .slice(0, 10),
+      agentDistribution,
+      tokenTrend,
     };
   }
 

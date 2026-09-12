@@ -1,9 +1,9 @@
+import { createHash } from 'node:crypto';
 import { ReviewAgent } from '@ai-review/agents';
 import { DiffContextBuilder } from '@ai-review/diff';
 import type { GitReader } from '@ai-review/diff';
 import type { ReviewProvider, TokenBudget } from '@ai-review/llm';
 import type { ToolRegistry } from '@ai-review/tools';
-import { createHash } from 'node:crypto';
 import type { CodeContext, Finding, FileContext, FileHistory, IgnoreRules, RagRetriever, ReviewPlan } from '@ai-review/shared';
 import type { RunnableConfig } from '@langchain/core/runnables';
 import { crossValidate } from './cross-validate.js';
@@ -52,6 +52,12 @@ export type PipelineDeps = {
   reviewCache?: ReviewCache | undefined;
   /** token 硬预算；预算耗尽时低优先级文件降级为 staticOnly（方案 3.3） */
   budget?: TokenBudget | undefined;
+  /** 配置启用的静态工具；未传时运行注册表中的全部工具 */
+  enabledTools?: readonly string[] | undefined;
+  /** RAG 召回数量；未传时使用 DiffContextBuilder 默认值 5 */
+  ragTopK?: number | undefined;
+  /** 展示在报告元数据中的模型名称 */
+  modelName?: string | undefined;
 };
 
 export type PipelineNode = (state: ReviewState, config: RunnableConfig) => Promise<Partial<ReviewState>>;
@@ -82,10 +88,13 @@ function selectFiles(context: CodeContext, paths: ReadonlySet<string>): CodeCont
 
 /** 读取 diff（暂存区或 base...HEAD 区间）并构建上下文包（方案 3.1） */
 export function makeParseNode(deps: PipelineDeps): PipelineNode {
-  const builder = new DiffContextBuilder(deps.gitReader, deps.rag, deps.ignores, 50, deps.base);
+  const builder = new DiffContextBuilder(deps.gitReader, deps.rag, deps.ignores, 50, deps.base, deps.ragTopK);
   return async (state) => {
     void state;
-    return { context: await builder.build() };
+    const rawDiff = deps.base === undefined
+      ? await deps.gitReader.readStagedDiff()
+      : await deps.gitReader.readRangeDiff(deps.base);
+    return { context: await builder.build(), rawDiff };
   };
 }
 
@@ -187,7 +196,7 @@ export function makeReviewNode(dimension: LlmDimension, deps: PipelineDeps): Pip
 
 /** 静态分析节点：确定性工具覆盖全部文件（fast/full 模式均全量执行，方案 3.0） */
 export function makeStaticReviewNode(deps: PipelineDeps): PipelineNode {
-  return async (state) => ({ findings: deps.registry.runAll(state.context) });
+  return async (state) => ({ findings: deps.registry.runAll(state.context, deps.enabledTools) });
 }
 
 /** 交叉验证 + 幻觉抑制（方案 3.6 五阶段后处理，当前实现阶段 1/2/5） */
