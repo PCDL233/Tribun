@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@ai-review/shared": "workspace:*",
+    "@ant-design/icons": "6.3.4",
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-router": "catalog:",
     "antd": "catalog:",

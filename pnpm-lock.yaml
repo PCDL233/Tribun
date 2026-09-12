@@ -240,6 +240,9 @@ importers:
       '@ai-review/llm':
         specifier: workspace:*
         version: link:../../packages/llm
+      '@ai-review/rag':
+        specifier: workspace:*
+        version: link:../../packages/rag
       '@ai-review/report':
         specifier: workspace:*
         version: link:../../packages/report
@@ -249,6 +252,9 @@ importers:
       '@ai-review/tools':
         specifier: workspace:*
         version: link:../../packages/tools
+      '@ai-sdk/openai':
+        specifier: 'catalog:'
+        version: 2.0.127(zod@4.6.2)
       '@hono/node-server':
         specifier: 'catalog:'
         version: 2.1.1(hono@4.13.7)
@@ -261,6 +267,9 @@ importers:
       prom-client:
         specifier: 'catalog:'
         version: 15.1.3
+      yaml:
+        specifier: 'catalog:'
+        version: 2.9.0
       zod:
         specifier: 'catalog:'
         version: 4.6.2
@@ -283,6 +292,9 @@ importers:
       '@ai-review/shared':
         specifier: workspace:*
         version: link:../../packages/shared
+      '@ant-design/icons':
+        specifier: 6.3.4
+        version: 6.3.4(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@tanstack/react-query':
         specifier: 'catalog:'
         version: 5.102.8(react@19.3.0)
