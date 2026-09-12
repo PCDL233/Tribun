@@ -190,4 +190,33 @@ describe('runReviewPipeline', () => {
       'not a git repository',
     );
   });
+
+  it('reuses cached findings on identical content and skips the LLM (方案 3.0 内容哈希去重)', async () => {
+    const cache = new Map<string, { findings: Finding[]; tokenSaved: number }>();
+    const reviewCache = {
+      get: async (key: string) => cache.get(key)?.findings,
+      set: async (key: string, findings: Finding[], tokenSaved: number) => {
+        cache.set(key, { findings, tokenSaved });
+      },
+    };
+    const calls = { count: 0 };
+    const marker = llmMarkerProvider(calls);
+    const deps = makeDeps({
+      diff: DEEP_DIFF,
+      providers: { correctness: marker, security: marker, performance: marker },
+      reviewCache,
+      mode: 'full',
+    });
+
+    const firstState = await runReviewPipeline(deps, { reviewId: 'test-cache-1' });
+    expect(firstState.metrics.cacheHits).toBe(0);
+    const firstCalls = calls.count;
+    expect(firstCalls).toBeGreaterThan(0);
+
+    const secondState = await runReviewPipeline(deps, { reviewId: 'test-cache-2' });
+    expect(secondState.metrics.cacheHits).toBeGreaterThan(0);
+    expect(calls.count).toBe(firstCalls); // LLM 零调用：命中文件不再进入 Provider
+    // 发现经缓存复用后与首轮一致（findings reducer 去重后仍保留 marker 发现）
+    expect(secondState.findings).toHaveLength(firstState.findings.length);
+  });
 });

@@ -62,5 +62,21 @@ export const findings = sqliteTable(
   (table) => [index('idx_findings_review').on(table.reviewId)],
 );
 
+/**
+ * 审查缓存表（方案六 review_cache；方案 3.0 步骤 8 内容哈希去重）。
+ * 键为 hash(agent + prompt 版本 + 新侧内容全文)，与仓库路径无关——
+ * 相同代码块跨仓库、跨审查复用同一份发现，token_saved 量化节省成本。
+ */
+export const reviewCache = sqliteTable('review_cache', {
+  cacheKey: text('cache_key').primaryKey(),
+  reviewId: text('review_id'),
+  findingsJson: text('findings_json').notNull(),
+  tokenSaved: integer('token_saved').notNull().default(0),
+  createdAt: text('created_at')
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+
 export type ReviewRow = typeof reviews.$inferSelect;
 export type FindingRow = typeof findings.$inferSelect;
+export type ReviewCacheRow = typeof reviewCache.$inferSelect;

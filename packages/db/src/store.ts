@@ -7,6 +7,7 @@ import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { z } from 'zod';
 import { FindingSchema } from '@ai-review/shared';
 import type {
+  Finding,
   IdentifiedFinding,
   ReviewListItem,
   ReviewReport,
@@ -14,7 +15,7 @@ import type {
   ReviewStats,
   SeverityCount,
 } from '@ai-review/shared';
-import { findings, reviews } from './schema.js';
+import { findings, reviewCache, reviews } from './schema.js';
 
 // API 契约类型以 shared 为单一事实源，此处转出口供既有调用方使用
 export type { IdentifiedFinding, ReviewListItem, ReviewReportDetail } from '@ai-review/shared';
@@ -91,6 +92,13 @@ export class ReviewStore {
         created_at         TEXT NOT NULL
       );
       CREATE INDEX IF NOT EXISTS idx_findings_review ON findings(review_id);
+      CREATE TABLE IF NOT EXISTS review_cache (
+        cache_key      TEXT PRIMARY KEY,
+        review_id      TEXT,
+        findings_json  TEXT NOT NULL,
+        token_saved    INTEGER NOT NULL DEFAULT 0,
+        created_at     TEXT NOT NULL
+      );
     `);
     this.db = drizzle(sqlite);
   }
@@ -256,6 +264,71 @@ export class ReviewStore {
       .where(eq(findings.id, findingId))
       .run();
     return result.changes > 0;
+  }
+
+  /**
+   * 读取审查缓存（方案 3.0 步骤 8：内容哈希去重，供 core 的 ReviewCache 接口调用）。
+   * @returns 命中时返回该键的全部发现；未命中或条目损坏（JSON/zod 校验失败）返回 undefined——
+   *          缓存损坏按"未命中"降级重审，属规范 §7.7 的可降级错误，不阻断流水线
+   */
+  public getCachedFindings(cacheKey: string): Finding[] | undefined {
+    const row = this.db
+      .select()
+      .from(reviewCache)
+      .where(eq(reviewCache.cacheKey, cacheKey))
+      .get();
+    if (row === undefined) return undefined;
+
+    let parsedJson: unknown;
+    try {
+      parsedJson = JSON.parse(row.findingsJson);
+    } catch {
+      return undefined;
+    }
+    if (!Array.isArray(parsedJson)) return undefined;
+    const result = z.array(FindingSchema).safeParse(parsedJson);
+    return result.success ? result.data : undefined;
+  }
+
+  /**
+   * 写入审查缓存（insert or replace：相同键以最新审查口径为准）。
+   * @param reviewId 产出该条目的审查（供追溯，可空——缓存由内容哈希寻址，与审查弱关联）
+   * @param entries 键为 core 生成的内容哈希
+   */
+  public saveCacheEntries(
+    reviewId: string | undefined,
+    entries: ReadonlyArray<{ cacheKey: string; findings: Finding[]; tokenSaved: number }>,
+  ): void {
+    if (entries.length === 0) return;
+    this.db.transaction(() => {
+      for (const entry of entries) {
+        this.db
+          .insert(reviewCache)
+          .values({
+            cacheKey: entry.cacheKey,
+            reviewId: reviewId ?? null,
+            findingsJson: JSON.stringify(entry.findings),
+            tokenSaved: entry.tokenSaved,
+          })
+          .onConflictDoUpdate({
+            target: reviewCache.cacheKey,
+            set: { reviewId, findingsJson: JSON.stringify(entry.findings), tokenSaved: entry.tokenSaved },
+          })
+          .run();
+      }
+    });
+  }
+
+  /** 缓存表规模与累计节省 token（成本观测，方案 §七 成本估算的落地数据） */
+  public getCacheSummary(): { entries: number; tokenSaved: number } {
+    const rows = this.db
+      .select({ tokenSaved: reviewCache.tokenSaved })
+      .from(reviewCache)
+      .all();
+    return {
+      entries: rows.length,
+      tokenSaved: rows.reduce((sum, row) => sum + row.tokenSaved, 0),
+    };
   }
 
   /**

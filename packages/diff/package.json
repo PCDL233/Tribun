@@ -9,7 +9,9 @@
       "default": "./dist/index.js"
     }
   },
-  "files": ["dist"],
+  "files": [
+    "dist"
+  ],
   "scripts": {
     "build": "tsc -p .",
     "typecheck": "tsc -p . --noEmit",
@@ -20,6 +22,10 @@
     "p-map": "catalog:",
     "parse-git-diff": "catalog:",
     "picomatch": "catalog:",
+    "tree-sitter": "catalog:",
+    "tree-sitter-go": "catalog:",
+    "tree-sitter-java": "catalog:",
+    "tree-sitter-python": "catalog:",
     "ts-morph": "catalog:"
   },
   "devDependencies": {

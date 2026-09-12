@@ -124,6 +124,31 @@ describe('ReviewStore', () => {
     }
   });
 
+  it('round-trips cache entries keyed by content hash (方案 3.0 内容哈希去重)', () => {
+    const store = new ReviewStore(new Database(':memory:'));
+    try {
+      expect(store.getCachedFindings('missing-key')).toBeUndefined();
+
+      const finding = makeFinding();
+      store.saveCacheEntries('review-1', [
+        { cacheKey: 'key-a', findings: [finding], tokenSaved: 1200 },
+      ]);
+      // 相同键以最新口径覆盖（insert or replace）
+      store.saveCacheEntries('review-2', [
+        { cacheKey: 'key-a', findings: [finding, makeFinding({ title: 'second' })], tokenSaved: 800 },
+      ]);
+
+      expect(store.getCachedFindings('key-a')).toHaveLength(2);
+      expect(store.getCacheSummary()).toEqual({ entries: 1, tokenSaved: 800 });
+
+      // 损坏条目按"未命中"降级（core 侧语义），不抛错不阻断
+      store['sqlite'].exec("UPDATE review_cache SET findings_json = '{broken' WHERE cache_key = 'key-a'");
+      expect(store.getCachedFindings('key-a')).toBeUndefined();
+    } finally {
+      store.close();
+    }
+  });
+
   it('aggregates severity distribution, daily trend and top risky files', () => {
     const store = new ReviewStore(new Database(':memory:'));
     try {

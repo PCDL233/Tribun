@@ -23,4 +23,6 @@ export type ReviewMetrics = {
   degradedToStatic: string[];
   /** 自愈回退执行轮次（方案 3.7，上限 3） */
   healRounds: number;
+  /** 审查缓存命中文件数（方案 3.0 步骤 8：内容哈希去重省去的 LLM 调用） */
+  cacheHits: number;
 };

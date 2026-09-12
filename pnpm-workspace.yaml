@@ -18,6 +18,11 @@ catalog:
   '@modelcontextprotocol/sdk': ^1.30.0
   parse-git-diff: ^0.0.20
   ts-morph: ^28.0.0
+  # Tree-sitter 多语言 AST（方案 Phase 4：Python/Go/Java 语法包，JS/TS 走 ts-morph）
+  tree-sitter: ^0.25.1
+  tree-sitter-python: ^0.25.0
+  tree-sitter-go: ^0.25.0
+  tree-sitter-java: ^0.23.0
   minisearch: ^7.2.0
   p-map: ^7.0.7
   p-limit: ^7.3.2

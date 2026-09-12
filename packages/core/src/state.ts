@@ -28,6 +28,7 @@ export function emptyMetrics(): ReviewMetrics {
     filesStaticOnly: 0,
     degradedToStatic: [],
     healRounds: 0,
+    cacheHits: 0,
   };
 }
 

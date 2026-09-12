@@ -1,11 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { PipelineDeps, PipelineRunner, ReviewState } from '@ai-review/core';
+import { runReviewPipeline } from '@ai-review/core';
+import type { GitRunner, PipelineDeps, PipelineRunner, ReviewState } from '@ai-review/core';
 import { createReviewStore, ReviewStore } from '@ai-review/db';
 import { GitReader } from '@ai-review/diff';
 import { createMockProvider } from '@ai-review/llm';
 import { buildDefaultRegistry } from '@ai-review/tools';
 import type { Finding } from '@ai-review/shared';
 import { buildApp } from '../src/app.js';
+import { createStoreReviewCache } from '../src/cache.js';
 import { createReviewMetrics } from '../src/metrics.js';
 import { ReviewService } from '../src/review-service.js';
 
@@ -57,6 +59,7 @@ function makeState(): ReviewState {
       filesStaticOnly: 1,
       degradedToStatic: [],
       healRounds: 0,
+      cacheHits: 0,
     },
   };
 }
@@ -225,6 +228,89 @@ describe('stats and metrics endpoints', () => {
       const body = await (await app.request('/metrics')).text();
       expect(body).toContain('ai_review_reviews_total{status="failed"} 1');
     });
+  });
+});
+
+describe('review cache integration (方案 3.0 内容哈希去重)', () => {
+  /** deep 分流 diff：敏感路径 30 + 大改动 25 + 删除守卫 20 = 75 分 */
+  function makeDeepDiff(): string {
+    return [
+      'diff --git a/src/auth/login.ts b/src/auth/login.ts',
+      'index 1111111..2222222 100644',
+      '--- a/src/auth/login.ts',
+      '+++ b/src/auth/login.ts',
+      '@@ -1,2 +1,103 @@',
+      ' const config = loadConfig();',
+      '-  } catch (error) {',
+      '+const cmd = exec(userInput);',
+      ...Array.from({ length: 100 }, (_, i) => `+const value${i} = ${i};`),
+      ' export function login() {}',
+    ].join('\n');
+  }
+
+  function makeFakeGit(): GitRunner {
+    return async (...args: string[]) => {
+      const [command, second] = args;
+      if (command === 'diff' && second === '--cached') return makeDeepDiff();
+      if (command === 'show' && second !== undefined) {
+        return 'const config = loadConfig();\nexport function login() {}\n';
+      }
+      if (command === 'branch') return 'main\n';
+      throw new Error(`unexpected git invocation: ${args.join(' ')}`);
+    };
+  }
+
+  function makeCacheHarness(): ReturnType<typeof buildApp> {
+    const store: ReviewStore = createReviewStore(':memory:');
+    const metrics = createReviewMetrics();
+    const reviewCache = createStoreReviewCache(store);
+    const service = new ReviewService(
+      store,
+      (repoPath, mode): PipelineDeps => ({
+        gitReader: new GitReader(makeFakeGit()),
+        rag: { query: async () => [] },
+        ignores: { allows: () => true },
+        history: { changeFrequency: async () => 0 },
+        providers: { correctness: makeDeps(mode).providers.correctness, security: makeDeps(mode).providers.security, performance: makeDeps(mode).providers.performance },
+        registry: makeDeps(mode).registry,
+        mode,
+        reviewCache,
+      }),
+      runReviewPipeline,
+      metrics,
+    );
+    return buildApp({ store, service, metrics });
+  }
+
+  it('persists cache entries through the real pipeline across reviews', async () => {
+    const app = makeCacheHarness();
+    const post = (): Promise<Response> =>
+      app.request('/api/reviews', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ repoPath: 'D:/tmp/repo', mode: 'full' }),
+      });
+
+    const first = (await (await post()).json()) as { reviewId: string };
+    const second = (await (await post()).json()) as { reviewId: string };
+
+    await vi.waitFor(async () => {
+      const list = (await (await app.request('/api/reviews')).json()) as {
+        reviews: Array<{ reviewId: string }>;
+      };
+      expect(list.reviews).toHaveLength(2);
+    });
+
+    const firstReport = (await (await app.request(`/api/reviews/${first.reviewId}`)).json()) as {
+      findings: Array<{ title: string }>;
+    };
+    const secondReport = (await (await app.request(`/api/reviews/${second.reviewId}`)).json()) as {
+      findings: Array<{ title: string }>;
+    };
+    // 第二次审查对相同内容命中缓存，发现口径与首轮一致
+    expect(secondReport.findings.map((f) => f.title)).toEqual(
+      firstReport.findings.map((f) => f.title),
+    );
   });
 });
 

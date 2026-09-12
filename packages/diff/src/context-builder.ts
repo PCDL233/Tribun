@@ -8,6 +8,7 @@ import type {
   IgnoreRules,
   RagRetriever,
 } from '@ai-review/shared';
+import { getTreeSitterContext } from './ast-foreign.js';
 import { createIgnoreRules, filterMeaningfulDiffs } from './filter.js';
 import { GitReader } from './git-reader.js';
 import { parseUnifiedDiff } from './parser.js';
@@ -21,6 +22,9 @@ const LANGUAGE_BY_EXTENSION: Readonly<Record<string, string>> = {
   '.go': 'go',
   '.java': 'java',
 };
+
+/** 走 Tree-sitter 语法包的语言（Phase 4 多语言扩展）；JS/TS 由 ts-morph 覆盖 */
+const TREE_SITTER_LANGUAGES: ReadonlySet<string> = new Set(['python', 'go', 'java']);
 
 function getLanguage(path: string): string | null {
   const extension = path.slice(path.lastIndexOf('.')).toLowerCase();
@@ -160,7 +164,9 @@ export class DiffContextBuilder {
     const astContext =
       language === 'typescript' || language === 'javascript'
         ? getTypeScriptContext(newSideContent, diff.changedLines)
-        : { snippet: '', signature: null };
+        : language !== null && TREE_SITTER_LANGUAGES.has(language)
+          ? getTreeSitterContext(newSideContent, diff.changedLines, language)
+          : { snippet: '', signature: null };
     const snippet =
       astContext.snippet || getLineWindow(newSideContent, diff.changedLines, this.contextRadius);
     const ragHits = await this.rag.query({
