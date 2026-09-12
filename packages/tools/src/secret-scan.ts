@@ -71,3 +71,34 @@ export function scanSecrets(files: readonly FileContext[]): Finding[] {
     }),
   );
 }
+
+/**
+ * 扫描 unified diff 文本中的疑似密钥（MCP `secret_scan` 工具的入参形态，方案 3.4）。
+ * 与 scanSecrets 共用同一规则表，保证进程内与 MCP 两条通道的检出行为一致。
+ * @param diffText unified diff 文本（只看新增行，忽略删除/上下文行）
+ * @returns 密钥泄露发现（filePath 为 "(diff)" 占位——调用方持有原始文件语境）
+ */
+export function scanDiffTextForSecrets(diffText: string): Finding[] {
+  const addedLines = diffText
+    .split(/\r?\n/)
+    .map((line, index) => ({ line, index }))
+    .filter(({ line }) => line.startsWith('+') && !line.startsWith('+++'));
+  return addedLines.flatMap(({ line, index }): Finding[] =>
+    SECRET_PATTERNS.filter((rule) => rule.pattern.test(line.slice(1))).map((rule) => ({
+      agent: 'static',
+      severity: rule.severity,
+      confidence: STATIC_CONFIDENCE,
+      filePath: '(diff)',
+      lineStart: index + 1,
+      lineEnd: index + 1,
+      title: `Possible ${rule.name} in changed code`,
+      description:
+        'The added line matches a known credential pattern. Hardcoded secrets leak through version history even after later removal.',
+      suggestion:
+        'Move the secret to an environment variable referenced from configuration and rotate the exposed credential.',
+      codeSnippet: line.slice(1),
+      cweId: rule.cweId,
+      isFalsePositive: false,
+    })),
+  );
+}

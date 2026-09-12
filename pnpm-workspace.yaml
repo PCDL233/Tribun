@@ -24,6 +24,8 @@ catalog:
   tree-sitter-go: ^0.25.0
   tree-sitter-java: ^0.23.0
   minisearch: ^7.2.0
+  # RAG 嵌入式向量库（方案 3.5：零服务依赖，随项目目录持久化）
+  '@lancedb/lancedb': ^0.20.0
   p-map: ^7.0.7
   p-limit: ^7.3.2
   picomatch: ^4.0.7

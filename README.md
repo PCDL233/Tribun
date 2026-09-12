@@ -9,6 +9,7 @@
 - **多语言上下文提取**：JS/TS 走 ts-morph，Python/Go/Java 走 Tree-sitter 官方语法包，按函数边界裁剪上下文；解析失败自动降级为行级窗口。
 - **风险规划分流**：0-100 风险评分，≥60 深度审查 / 40~60 快速审查 / <40 仅静态分析，token 预算硬上限。
 - **审查缓存**：内容哈希（agent + prompt 版本 + 代码内容）去重，相同代码块跨审查复用发现，不重复消耗 LLM。
+- **RAG 知识库**：AST/文档边界切块，LanceDB 向量检索与 MiniSearch BM25 经 RRF 融合，块级内容哈希增量索引。
 - **双模式**：`fast`（pre-commit，≤15s）/ `full`（CI 与手动，≤60s）。
 - **Web Dashboard**：审查历史、五段式报告详情（diff + 行级发现 + 误报标记）、SSE 实时进度、统计分析（ECharts）。
 - **可观测性**：Prometheus 指标（`/metrics`）、统计聚合接口（`/api/stats`）。
@@ -25,7 +26,8 @@ packages/
   diff/      unified diff 解析、index/HEAD 内容读取、Tree-sitter & ts-morph 上下文提取
   core/      LangGraph.js 流水线、风险规划器、交叉验证、审查缓存接口、基准测试
   agents/    ReAct 审查 Agent
-  tools/     静态分析工具总线（secret_scan / complexity_check）
+  tools/     静态分析工具总线 + MCP stdio Server（secret_scan / complexity_check）
+  rag/       RAG 知识库：LanceDB 向量 + MiniSearch BM25 + RRF 融合，块级哈希增量索引
   llm/       Provider 封装（含 mock provider）、token 预算器
   db/        Drizzle ORM + SQLite（reviews / findings / review_cache）
   report/    Markdown / JSON 报告渲染
@@ -47,6 +49,18 @@ pnpm exec ai-review run --staged
 
 # CI 模式：审查 base...HEAD 区间（full 模式）
 pnpm exec ai-review run --base origin/main --mode full --block-on BLOCKER --json
+
+# 生成配置骨架（AiReviewConfigSchema 默认值）
+pnpm exec ai-review init
+
+# 安装 .husky/pre-commit 钩子
+pnpm exec ai-review install-hook
+
+# 构建/增量更新 RAG 索引（默认本地 Ollama nomic-embed-text，OpenAI 兼容端点）
+pnpm exec ai-review index --paths docs/ src/
+
+# 以 stdio MCP 服务器暴露静态分析工具（供 Claude Code 等外部 Agent 复用）
+pnpm exec ai-review mcp
 
 # 启动团队版服务（API + Dashboard 同端口）
 pnpm turbo dev

@@ -1,5 +1,5 @@
 {
-  "name": "@ai-review/tools",
+  "name": "@ai-review/rag",
   "version": "1.0.0",
   "private": true,
   "type": "module",
@@ -19,9 +19,14 @@
   },
   "dependencies": {
     "@ai-review/shared": "workspace:*",
-    "@modelcontextprotocol/sdk": "catalog:",
+    "@lancedb/lancedb": "catalog:",
+    "ai": "catalog:",
+    "minisearch": "catalog:",
     "ts-morph": "catalog:",
-    "zod": "catalog:"
+    "tree-sitter": "catalog:",
+    "tree-sitter-go": "catalog:",
+    "tree-sitter-java": "catalog:",
+    "tree-sitter-python": "catalog:"
   },
   "devDependencies": {
     "@ai-review/tsconfig": "workspace:*",
