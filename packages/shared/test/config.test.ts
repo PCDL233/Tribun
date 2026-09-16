@@ -49,6 +49,12 @@ describe('loadConfig', () => {
     expect(() => loadConfig(path)).toThrow(/llm\.provider/);
   });
 
+  it('accepts domestic providers in the llm provider enum', () => {
+    const path = join(dir, '.ai-review.yml');
+    writeFileSync(path, 'llm:\n  provider: deepseek\n');
+    expect(loadConfig(path).llm.provider).toBe('deepseek');
+  });
+
   it('throws ConfigError for missing file', () => {
     expect(() => loadConfig(join(dir, 'nope.yml'))).toThrow(ConfigError);
   });

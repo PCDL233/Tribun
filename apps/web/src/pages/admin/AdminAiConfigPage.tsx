@@ -3,6 +3,7 @@ import type { ReactElement } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import {
   Alert,
+  AutoComplete,
   Button,
   Card,
   Form,
@@ -15,28 +16,26 @@ import {
 } from 'antd';
 import type { AdminConfig } from '@ai-review/shared/api';
 import { AdminConfigSchema } from '@ai-review/shared/api';
+import { MODEL_PROVIDER_LIST, MODEL_PROVIDERS } from '@ai-review/shared/api';
 import { fetchAdminConfig, updateAdminConfig } from '../../api';
 import { describeError } from '../../parse-response';
 import { CardHeading, PageHeader } from '../../components/PageHeader';
 
-const PROVIDER_OPTIONS = [
-  { label: 'Anthropic', value: 'anthropic' },
-  { label: 'OpenAI', value: 'openai' },
-  { label: 'Ollama', value: 'ollama' },
-  { label: 'Mock（离线）', value: 'mock' },
-];
-
-const DEFAULT_ENDPOINTS: Record<string, string> = {
-  anthropic: 'https://api.anthropic.com/v1',
-  openai: 'https://api.openai.com/v1',
-  ollama: 'http://127.0.0.1:11434/v1',
-};
+/** Provider 下拉选项直接取自 shared 目录，与配置 schema 同源，避免双份维护。 */
+const PROVIDER_OPTIONS = MODEL_PROVIDER_LIST.map((info) => ({
+  label: info.label,
+  value: info.id,
+}));
 
 export function AdminAiConfigPage(): ReactElement {
   const [form] = Form.useForm<AdminConfig>();
   const [saved, setSaved] = useState(false);
   const queryClient = useQueryClient();
   const configQuery = useQuery({ queryKey: ['admin-config'], queryFn: fetchAdminConfig });
+  // 当前 Provider 决定“推荐模型”预设列表；模型字段仍可自由输入。
+  const provider =
+    Form.useWatch<AdminConfig['llm']['provider']>(['llm', 'provider'], form) ?? 'anthropic';
+  const recommendedModels = MODEL_PROVIDERS[provider]?.recommendedModels ?? [];
   const saveMutation = useMutation({
     mutationFn: (config: AdminConfig) => updateAdminConfig(config),
     onSuccess: (config) => {
@@ -52,8 +51,10 @@ export function AdminAiConfigPage(): ReactElement {
 
   const handleProviderChange = (provider: string): void => {
     const current = form.getFieldValue(['llm', 'baseUrl']) as string | undefined;
-    if (current === undefined || current === '') {
-      form.setFieldValue(['llm', 'baseUrl'], DEFAULT_ENDPOINTS[provider] ?? '');
+    if (current !== undefined && current !== '') return;
+    const info = MODEL_PROVIDER_LIST.find((item) => item.id === provider);
+    if (info !== undefined) {
+      form.setFieldValue(['llm', 'baseUrl'], info.defaultEndpoint);
     }
   };
 
@@ -101,6 +102,7 @@ export function AdminAiConfigPage(): ReactElement {
           <Form.Item
             label="Provider"
             name={['llm', 'provider']}
+            extra="已支持国内主流模型服务：DeepSeek、智谱 GLM、Moonshot Kimi、通义千问、豆包、MiniMax。"
             rules={[{ required: true, message: '请选择模型提供商' }]}
           >
             <Select options={PROVIDER_OPTIONS} onChange={handleProviderChange} />
@@ -110,7 +112,10 @@ export function AdminAiConfigPage(): ReactElement {
             name={['llm', 'model']}
             rules={[{ required: true, message: '请输入模型名称' }]}
           >
-            <Input placeholder="例如 claude-sonnet-4.5 或 gpt-4o" />
+            <AutoComplete
+              options={recommendedModels.map((model) => ({ value: model }))}
+              placeholder="选择推荐模型或直接输入，例如 deepseek-v4-pro"
+            />
           </Form.Item>
           <Form.Item
             label="Base URL"

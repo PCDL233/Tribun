@@ -1,4 +1,4 @@
-import { FindingSchema } from '@ai-review/shared';
+import { FindingSchema, MODEL_PROVIDERS } from '@ai-review/shared';
 import type { AiReviewConfig, CodeContext, Finding } from '@ai-review/shared';
 
 /** LLM Provider 的最小边界，真实 AI Provider 与离线 mock 均遵循这一契约。 */
@@ -69,12 +69,14 @@ function isEnvPlaceholder(value: string): boolean {
 
 function endpointFor(provider: HttpProviderKind, baseUrl?: string): string {
   if (baseUrl !== undefined && baseUrl !== '') return baseUrl;
-  if (provider === 'anthropic') {
-    return process.env.AI_REVIEW_ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com/v1';
+  const info = MODEL_PROVIDERS[provider];
+  if (info !== undefined) {
+    // 统一约定 AI_REVIEW_<PROVIDER>_BASE_URL 环境变量覆盖，缺省用目录默认端点。
+    const envBase = process.env[info.envVarName];
+    if (envBase !== undefined && envBase !== '') return envBase;
+    return info.defaultEndpoint;
   }
-  if (provider === 'openai') {
-    return process.env.AI_REVIEW_OPENAI_BASE_URL ?? 'https://api.openai.com/v1';
-  }
+  // 防御性兜底：枚举新增但目录未同步时退回本地 Ollama 默认端点。
   return process.env.AI_REVIEW_OLLAMA_BASE_URL ?? 'http://127.0.0.1:11434/v1';
 }
 
@@ -220,7 +222,7 @@ async function requestJson(
   }
 }
 
-/** 创建一个直接调用 OpenAI/Anthropic/Ollama HTTP API 的 Provider。 */
+/** 创建一个直接调用 OpenAI/Anthropic/国内厂商/Ollama HTTP API 的 Provider。 */
 export function createHttpProvider(options: HttpProviderOptions): ReviewProvider {
   return {
     async review(context, signal): Promise<Finding[]> {
