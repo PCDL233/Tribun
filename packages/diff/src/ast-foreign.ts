@@ -90,7 +90,10 @@ export function getTreeSitterContext(
     containerNode.endPosition.column === 0 && containerNode.endPosition.row >= startLine
       ? containerNode.endPosition.row
       : containerNode.endPosition.row + 1;
-  const snippet = content.split(/\r?\n/).slice(startLine - 1, endRow).join('\n');
+  const snippet = content
+    .split(/\r?\n/)
+    .slice(startLine - 1, endRow)
+    .join('\n');
   return {
     snippet,
     signature: buildSignature(containerNode, containerKind, startLine, endRow),

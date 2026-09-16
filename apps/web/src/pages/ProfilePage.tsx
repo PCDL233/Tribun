@@ -2,10 +2,16 @@ import { useState } from 'react';
 import type { ReactElement } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Form, Input, Tag, Typography } from 'antd';
-import { AUTH_QUERY_KEY, useAuth, useChangePassword } from '../hooks/use-auth';
+import { Alert, App as AntdApp, Button, Card, Form, Input, Tag, Typography, Upload } from 'antd';
+import type { UploadFile } from 'antd';
+import { AUTH_QUERY_KEY, useAuth, useChangePassword, useUploadAvatar } from '../hooks/use-auth';
 import { describeError } from '../parse-response';
 import { CardHeading, PageHeader } from '../components/PageHeader';
+import { UserAvatar } from '../components/UserAvatar';
+
+/** 头像上传的常规限制（与服务端一致）：位图格式，≤2MB */
+const AVATAR_ACCEPT = 'image/jpeg,image/png,image/webp,image/gif';
+const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
 
 type ChangePasswordFormValues = {
   oldPassword: string;
@@ -14,12 +20,33 @@ type ChangePasswordFormValues = {
 };
 
 export function ProfilePage(): ReactElement {
+  const { message } = AntdApp.useApp();
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const changePasswordMutation = useChangePassword();
+  const uploadAvatarMutation = useUploadAvatar();
   const [form] = Form.useForm<ChangePasswordFormValues>();
   const [submitted, setSubmitted] = useState(false);
+
+  /** 本地预校验（类型/大小）后交给 uploadAvatar mutation，避免真实上传才报错 */
+  const beforeUpload = (file: UploadFile): boolean | string => {
+    const allowed = ['image/jpeg', 'image/png', 'image/webp', 'image/gif'].includes(
+      file.type ?? '',
+    );
+    if (!allowed) {
+      void message.error('仅支持 jpg / png / webp / gif 图片');
+      return Upload.LIST_IGNORE;
+    }
+    if ((file.size ?? 0) > AVATAR_MAX_BYTES) {
+      void message.error('图片大小不能超过 2MB');
+      return Upload.LIST_IGNORE;
+    }
+    void uploadAvatarMutation.mutateAsync(file as unknown as File).catch((e) => {
+      void message.error(describeError(e));
+    });
+    return Upload.LIST_IGNORE;
+  };
 
   const handleFinish = async (values: ChangePasswordFormValues): Promise<void> => {
     await changePasswordMutation.mutateAsync({
@@ -49,12 +76,21 @@ export function ProfilePage(): ReactElement {
               borderBottom: '1px solid #eef1f6',
             }}
           >
-            <div
-              className="app-user-avatar"
-              style={{ width: 54, height: 54, borderRadius: 17, fontSize: 18 }}
+            <Upload
+              accept={AVATAR_ACCEPT}
+              showUploadList={false}
+              beforeUpload={beforeUpload}
+              style={{ display: 'inline-flex' }}
             >
-              {user?.username?.slice(0, 2).toUpperCase() ?? 'AI'}
-            </div>
+              <span className="avatar-upload-wrap">
+                <UserAvatar
+                  user={user}
+                  className="app-user-avatar"
+                  style={{ width: 54, height: 54, borderRadius: 17, fontSize: 18 }}
+                />
+                <span className="avatar-upload-hint">更换</span>
+              </span>
+            </Upload>
             <div>
               <Typography.Title level={4} style={{ margin: 0 }}>
                 {user?.username}

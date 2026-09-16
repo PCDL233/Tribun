@@ -25,7 +25,10 @@ export async function buildIndex(options: BuildIndexOptions): Promise<void> {
     baseURL: options.baseUrl ?? 'http://127.0.0.1:11434/v1',
     apiKey: 'ollama',
   });
-  const kb = new KnowledgeBase(config.rag.indexDir, openai.textEmbeddingModel(options.model ?? 'nomic-embed-text'));
+  const kb = new KnowledgeBase(
+    config.rag.indexDir,
+    openai.textEmbeddingModel(options.model ?? 'nomic-embed-text'),
+  );
   const summary = await kb.build(options.paths);
   console.log(
     `index updated: ${summary.totalChunks} chunk(s), ${summary.embeddedChunks} embedded, ${summary.removedChunks} removed`,

@@ -4,7 +4,7 @@ services:
   review-server:
     build: .
     ports:
-      - "8080:8080" # API + Web Dashboard（同一端口）
+      - '8080:8080' # API + Web Dashboard（同一端口）
     volumes:
       - review-data:/app/.ai-review-cache
 

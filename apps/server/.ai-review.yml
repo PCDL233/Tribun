@@ -1,0 +1,37 @@
+llm:
+  provider: anthropic
+  model: claude-sonnet-4.5
+  apiKey: ${AI_REVIEW_API_KEY}
+  maxTokensPerReview: 50000
+  temperature: 0.1
+  mockFixturesDir: .ai-review-cache/llm-fixtures
+review:
+  mode: fast
+  dimensions:
+    - correctness
+    - security
+    - performance
+    - maintainability
+  blockOn: BLOCKER
+  ignorePatterns:
+    - '*.lock'
+    - pnpm-lock.yaml
+    - dist/**
+    - '*.min.js'
+rag:
+  enabled: true
+  knowledgeBasePaths:
+    - docs/
+  indexDir: .ai-review-cache/vectors
+  topK: 5
+staticAnalysis:
+  enabledTools:
+    - ast_parse
+    - complexity_check
+    - secret_scan
+    - dependency_scan
+  complexityThreshold: 15
+report:
+  format: markdown
+  outputDir: .ai-review-reports
+  includePraise: true

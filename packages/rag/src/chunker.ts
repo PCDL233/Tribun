@@ -144,9 +144,7 @@ function chunkTreeSitter(path: string, content: string, language: string): Chunk
   const lines = content.split(/\r?\n/);
   return containers.flatMap((container, index) => {
     const name = container.childForFieldName('name')?.text ?? '(anonymous)';
-    const text = lines
-      .slice(container.startPosition.row, container.endPosition.row + 1)
-      .join('\n');
+    const text = lines.slice(container.startPosition.row, container.endPosition.row + 1).join('\n');
     return splitLongChunk(makeChunk(path, index, `${language}:${name}`, text), path, index);
   });
 }

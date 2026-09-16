@@ -57,6 +57,7 @@ type HttpProviderOptions = {
   provider: HttpProviderKind;
   model: string;
   apiKey: string;
+  baseUrl?: string;
   temperature: number;
   maxTokens: number;
   dimension: ReviewDimension;
@@ -66,7 +67,8 @@ function isEnvPlaceholder(value: string): boolean {
   return /^\$\{[A-Z0-9_]+\}$/.test(value);
 }
 
-function endpointFor(provider: HttpProviderKind): string {
+function endpointFor(provider: HttpProviderKind, baseUrl?: string): string {
+  if (baseUrl !== undefined && baseUrl !== '') return baseUrl;
   if (provider === 'anthropic') {
     return process.env.AI_REVIEW_ANTHROPIC_BASE_URL ?? 'https://api.anthropic.com/v1';
   }
@@ -100,11 +102,15 @@ function buildPrompt(context: CodeContext, dimension: ReviewDimension): string {
 function extractJson(text: string): unknown {
   const candidates = [
     text.trim(),
-    text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').trim(),
+    text
+      .replace(/^```(?:json)?\s*/i, '')
+      .replace(/\s*```$/i, '')
+      .trim(),
   ];
   const firstArray = text.indexOf('[');
   const lastArray = text.lastIndexOf(']');
-  if (firstArray >= 0 && lastArray > firstArray) candidates.push(text.slice(firstArray, lastArray + 1));
+  if (firstArray >= 0 && lastArray > firstArray)
+    candidates.push(text.slice(firstArray, lastArray + 1));
   for (const candidate of candidates) {
     try {
       const parsed: unknown = JSON.parse(candidate);
@@ -140,7 +146,8 @@ function parseFindings(text: string, dimension: ReviewDimension): Finding[] {
 }
 
 function responseText(payload: unknown): string {
-  if (typeof payload !== 'object' || payload === null) throw new Error('LLM response is not an object');
+  if (typeof payload !== 'object' || payload === null)
+    throw new Error('LLM response is not an object');
   const value = payload as {
     choices?: Array<{ message?: { content?: unknown } }>;
     content?: Array<{ type?: string; text?: unknown }>;
@@ -148,10 +155,19 @@ function responseText(payload: unknown): string {
   const openAiContent = value.choices?.[0]?.message?.content;
   if (typeof openAiContent === 'string') return openAiContent;
   if (Array.isArray(openAiContent)) {
-    return openAiContent.map((part) => typeof part === 'object' && part !== null && 'text' in part ? String((part as { text: unknown }).text) : '').join('');
+    return openAiContent
+      .map((part) =>
+        typeof part === 'object' && part !== null && 'text' in part
+          ? String((part as { text: unknown }).text)
+          : '',
+      )
+      .join('');
   }
   if (Array.isArray(value.content)) {
-    return value.content.filter((part) => part.type === 'text').map((part) => String(part.text ?? '')).join('');
+    return value.content
+      .filter((part) => part.type === 'text')
+      .map((part) => String(part.text ?? ''))
+      .join('');
   }
   throw new Error('LLM response did not contain text content');
 }
@@ -161,7 +177,7 @@ async function requestJson(
   context: CodeContext,
   signal?: AbortSignal,
 ): Promise<unknown> {
-  const endpoint = trimEndpoint(endpointFor(options.provider));
+  const endpoint = trimEndpoint(endpointFor(options.provider, options.baseUrl));
   const prompt = buildPrompt(context, options.dimension);
   const headers: Record<string, string> = { 'content-type': 'application/json' };
   let url = `${endpoint}/chat/completions`;
@@ -193,7 +209,10 @@ async function requestJson(
     ...(signal === undefined ? {} : { signal }),
   });
   const responseBody = await response.text();
-  if (!response.ok) throw new Error(`${options.provider} request failed (${response.status}): ${responseBody.slice(0, 500)}`);
+  if (!response.ok)
+    throw new Error(
+      `${options.provider} request failed (${response.status}): ${responseBody.slice(0, 500)}`,
+    );
   try {
     return JSON.parse(responseBody) as unknown;
   } catch (error) {
@@ -225,24 +244,33 @@ export function createConfiguredProvider(
   if (llm.provider === 'mock') return mock;
 
   // 未配置云端密钥时跳过 primary，仍尝试本地 Ollama；这样默认配置不会直接退化成 mock。
-  const primary = llm.provider !== 'ollama' && isEnvPlaceholder(llm.apiKey)
-    ? undefined
-    : createHttpProvider({
-      provider: llm.provider,
-      model: llm.model,
-      apiKey: llm.provider === 'ollama' ? 'ollama' : llm.apiKey,
-      temperature: llm.temperature,
-      maxTokens: llm.maxTokensPerReview,
-      dimension,
-    });
-  const fallback = llm.provider === 'ollama' ? undefined : createHttpProvider({
-    provider: 'ollama',
-    model: process.env.AI_REVIEW_OLLAMA_MODEL ?? 'qwen3-coder:30b',
-    apiKey: 'ollama',
-    temperature: llm.temperature,
-    maxTokens: llm.maxTokensPerReview,
-    dimension,
-  });
+  const primary =
+    llm.provider !== 'ollama' && isEnvPlaceholder(llm.apiKey)
+      ? undefined
+      : createHttpProvider({
+          provider: llm.provider,
+          model: llm.model,
+          apiKey: llm.provider === 'ollama' ? 'ollama' : llm.apiKey,
+          ...(llm.baseUrl !== undefined && llm.baseUrl !== '' ? { baseUrl: llm.baseUrl } : {}),
+          temperature: llm.temperature,
+          maxTokens: llm.maxTokensPerReview,
+          dimension,
+        });
+  const fallback =
+    llm.provider === 'ollama'
+      ? undefined
+      : createHttpProvider({
+          provider: 'ollama',
+          model: process.env.AI_REVIEW_OLLAMA_MODEL ?? 'qwen3-coder:30b',
+          apiKey: 'ollama',
+          ...(process.env.AI_REVIEW_OLLAMA_BASE_URL !== undefined &&
+          process.env.AI_REVIEW_OLLAMA_BASE_URL !== ''
+            ? { baseUrl: process.env.AI_REVIEW_OLLAMA_BASE_URL }
+            : {}),
+          temperature: llm.temperature,
+          maxTokens: llm.maxTokensPerReview,
+          dimension,
+        });
 
   return {
     async review(context, signal): Promise<Finding[]> {
@@ -268,7 +296,9 @@ export function createConfiguredProvider(
 }
 
 /** 为三个审查维度装配同一份配置。 */
-export function createConfiguredProviders(config: AiReviewConfig): Record<ReviewDimension, ReviewProvider> {
+export function createConfiguredProviders(
+  config: AiReviewConfig,
+): Record<ReviewDimension, ReviewProvider> {
   return {
     correctness: createConfiguredProvider(config, 'correctness'),
     security: createConfiguredProvider(config, 'security'),

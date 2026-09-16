@@ -46,19 +46,17 @@ describe('ToolRegistry', () => {
       name: 'flag-all',
       description: 'flags one finding',
       run: (context) =>
-        context.files.map(
-          (file): Finding => ({
-            agent: 'static',
-            severity: 'NIT',
-            confidence: 0.9,
-            filePath: file.diff.path,
-            lineStart: 1,
-            lineEnd: 1,
-            title: 'flagged',
-            description: 'flagged by tool',
-            isFalsePositive: false,
-          }),
-        ),
+        context.files.map((file): Finding => ({
+          agent: 'static',
+          severity: 'NIT',
+          confidence: 0.9,
+          filePath: file.diff.path,
+          lineStart: 1,
+          lineEnd: 1,
+          title: 'flagged',
+          description: 'flagged by tool',
+          isFalsePositive: false,
+        })),
     });
     const context = makeContext(['a.ts']);
     expect(registry.runAll(context)).toHaveLength(1);
@@ -68,6 +66,11 @@ describe('ToolRegistry', () => {
     const registry = buildDefaultRegistry();
     const context = makeContext(['a.ts']);
     expect(registry.runAll(context, ['secret_scan', 'dependency_scan'])).toEqual([]);
-    expect(registry.list()).toEqual(['ast_parse', 'complexity_check', 'dependency_scan', 'secret_scan']);
+    expect(registry.list()).toEqual([
+      'ast_parse',
+      'complexity_check',
+      'dependency_scan',
+      'secret_scan',
+    ]);
   });
 });

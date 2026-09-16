@@ -54,6 +54,19 @@ function parseDiff(diffText: string): DiffRow[] {
   });
 }
 
+/** 单列 unified diff：每行只显示一个行号（新增/上下文为新文件行号，删除为旧文件行号，元行为空） */
+function rowLineNumber(row: DiffRow): number | undefined {
+  switch (row.kind) {
+    case 'remove':
+      return row.oldLine;
+    case 'add':
+    case 'context':
+      return row.newLine;
+    default:
+      return undefined;
+  }
+}
+
 function rowMatchesFinding(row: DiffRow, findings: IdentifiedFinding[]): boolean {
   if (row.path === undefined || row.newLine === undefined) return false;
   const path = normalizePath(row.path);
@@ -68,14 +81,21 @@ function rowMatchesFinding(row: DiffRow, findings: IdentifiedFinding[]): boolean
 
 export function DiffViewer(props: DiffViewerProps): ReactElement {
   if (props.diffText === null || props.diffText.trim() === '') {
-    return <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无可用的 Diff（存量记录可能未持久化原始变更）" />;
+    return (
+      <Empty
+        image={Empty.PRESENTED_IMAGE_SIMPLE}
+        description="暂无可用的 Diff（存量记录可能未持久化原始变更）"
+      />
+    );
   }
   const rows = parseDiff(props.diffText);
   return (
     <div className="diff-viewer" role="region" aria-label="代码变更 Diff">
       <div className="diff-toolbar">
         <Space size={8} wrap>
-          <Typography.Text type="secondary">共 {rows.filter((row) => row.kind !== 'meta').length} 行变更</Typography.Text>
+          <Typography.Text type="secondary">
+            共 {rows.filter((row) => row.kind !== 'meta').length} 行变更
+          </Typography.Text>
           <Tag color="success">新增</Tag>
           <Tag color="error">删除</Tag>
           {props.findings.length > 0 ? <Tag color="warning">标记问题位置</Tag> : null}
@@ -85,9 +105,11 @@ export function DiffViewer(props: DiffViewerProps): ReactElement {
         {rows.map((row) => {
           const finding = rowMatchesFinding(row, props.findings);
           return (
-            <div key={row.key} className={`diff-row diff-row-${row.kind}${finding ? ' diff-row-finding' : ''}`}>
-              <span className="diff-line-number">{row.oldLine ?? ''}</span>
-              <span className="diff-line-number">{row.newLine ?? ''}</span>
+            <div
+              key={row.key}
+              className={`diff-row diff-row-${row.kind}${finding ? ' diff-row-finding' : ''}`}
+            >
+              <span className="diff-line-number">{rowLineNumber(row) ?? ''}</span>
               <code className="diff-line-text">{row.text || ' '}</code>
             </div>
           );

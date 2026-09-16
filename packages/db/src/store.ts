@@ -128,7 +128,8 @@ export class ReviewStore {
         role          TEXT NOT NULL DEFAULT 'user',
         status        TEXT NOT NULL DEFAULT 'active',
         created_at    TEXT NOT NULL,
-        last_login_at TEXT
+        last_login_at TEXT,
+        avatar_url    TEXT
       );
       CREATE TABLE IF NOT EXISTS sessions (
         token       TEXT PRIMARY KEY,
@@ -136,7 +137,30 @@ export class ReviewStore {
         expires_at  TEXT NOT NULL,
         created_at  TEXT NOT NULL
       );
+      CREATE TABLE IF NOT EXISTS roles (
+        id            TEXT PRIMARY KEY,
+        name          TEXT NOT NULL UNIQUE,
+        description   TEXT,
+        priority      INTEGER NOT NULL DEFAULT 100,
+        permissions   TEXT NOT NULL DEFAULT '[]',
+        is_system     INTEGER NOT NULL DEFAULT 0,
+        created_at    TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS user_roles (
+        user_id     TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role_id     TEXT NOT NULL REFERENCES roles(id) ON DELETE CASCADE,
+        created_at  TEXT NOT NULL,
+        PRIMARY KEY (user_id, role_id)
+      );
     `);
+    // 存量库升级：users 补 avatar_url 列（新建库由上方建表语句直接包含，ALTER 必然重复报错）
+    try {
+      sqlite.exec('ALTER TABLE users ADD COLUMN avatar_url TEXT');
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      if (!message.includes('duplicate column name')) throw e;
+    }
+    seedRoles(sqlite);
     this.db = drizzle(sqlite);
   }
 
@@ -175,7 +199,10 @@ export class ReviewStore {
           tokenUsed: report.meta.tokenUsed,
           durationMs: report.meta.durationMs,
           createdBy: createdBy ?? null,
-          diffText: options.diffText === undefined ? null : options.diffText?.slice(0, 2 * 1024 * 1024) ?? null,
+          diffText:
+            options.diffText === undefined
+              ? null
+              : (options.diffText?.slice(0, 2 * 1024 * 1024) ?? null),
           errorMessage: options.errorMessage ?? report.meta.errorMessage ?? null,
           reportJson: JSON.stringify({
             summary: report.summary,
@@ -258,7 +285,9 @@ export class ReviewStore {
       query.repo === undefined ? undefined : like(reviews.repoPath, `%${query.repo}%`),
       query.branch === undefined ? undefined : like(reviews.branch, `%${query.branch}%`),
       query.from === undefined ? undefined : gte(reviews.createdAt, query.from),
-      query.to === undefined ? undefined : lte(reviews.createdAt, query.to.length === 10 ? `${query.to}T23:59:59.999Z` : query.to),
+      query.to === undefined
+        ? undefined
+        : lte(reviews.createdAt, query.to.length === 10 ? `${query.to}T23:59:59.999Z` : query.to),
       query.q === undefined
         ? undefined
         : or(
@@ -306,7 +335,11 @@ export class ReviewStore {
   }
 
   /** 读取审查输入，供服务端重跑时复用原始仓库与模式。 */
-  public getReviewInput(reviewId: string): { repoPath: string; mode: 'fast' | 'full'; createdBy: string | null } {
+  public getReviewInput(reviewId: string): {
+    repoPath: string;
+    mode: 'fast' | 'full';
+    createdBy: string | null;
+  } {
     const row = this.db
       .select({ repoPath: reviews.repoPath, mode: reviews.mode, createdBy: reviews.createdBy })
       .from(reviews)
@@ -446,11 +479,7 @@ export class ReviewStore {
    *          缓存损坏按"未命中"降级重审，属规范 §7.7 的可降级错误，不阻断流水线
    */
   public getCachedFindings(cacheKey: string): Finding[] | undefined {
-    const row = this.db
-      .select()
-      .from(reviewCache)
-      .where(eq(reviewCache.cacheKey, cacheKey))
-      .get();
+    const row = this.db.select().from(reviewCache).where(eq(reviewCache.cacheKey, cacheKey)).get();
     if (row === undefined) return undefined;
 
     let parsedJson: unknown;
@@ -486,7 +515,11 @@ export class ReviewStore {
           })
           .onConflictDoUpdate({
             target: reviewCache.cacheKey,
-            set: { reviewId, findingsJson: JSON.stringify(entry.findings), tokenSaved: entry.tokenSaved },
+            set: {
+              reviewId,
+              findingsJson: JSON.stringify(entry.findings),
+              tokenSaved: entry.tokenSaved,
+            },
           })
           .run();
       }
@@ -495,10 +528,7 @@ export class ReviewStore {
 
   /** 缓存表规模与累计节省 token（成本观测，方案 §七 成本估算的落地数据） */
   public getCacheSummary(): { entries: number; tokenSaved: number } {
-    const rows = this.db
-      .select({ tokenSaved: reviewCache.tokenSaved })
-      .from(reviewCache)
-      .all();
+    const rows = this.db.select({ tokenSaved: reviewCache.tokenSaved }).from(reviewCache).all();
     return {
       entries: rows.length,
       tokenSaved: rows.reduce((sum, row) => sum + row.tokenSaved, 0),
@@ -511,7 +541,10 @@ export class ReviewStore {
    * 避免 SQLite 字符串日期聚合的方言耦合。
    * @param createdBy 数据隔离过滤：普通用户仅统计本人数据（admin 省略此参数）
    */
-  public getStats(createdBy?: string, range?: { from?: string | undefined; to?: string | undefined }): ReviewStats {
+  public getStats(
+    createdBy?: string,
+    range?: { from?: string | undefined; to?: string | undefined },
+  ): ReviewStats {
     const conditions = [
       ...(createdBy === undefined ? [] : [eq(reviews.createdBy, createdBy)]),
       ...(range?.from === undefined ? [] : [gte(reviews.createdAt, `${range.from}T00:00:00.000Z`)]),
@@ -623,6 +656,37 @@ export class ReviewStore {
 /** 创建基于文件路径的存储（随项目目录持久化，如 .ai-review-cache/reviews.db）；父目录不存在时自动创建 */
 export function createReviewStore(dbFile: string): ReviewStore {
   return new ReviewStore(openSqlite(dbFile));
+}
+
+/**
+ * 内置角色种子（幂等）：admin（全权限、最高优先级）与 user（常规用户端权限）。
+ * 仅在首次建表时插入，后续启动不再覆盖用户对内置角色的修改。
+ */
+function seedRoles(sqlite: Database.Database): void {
+  const count = sqlite.prepare('SELECT COUNT(*) AS c FROM roles').get() as { c: number };
+  if (count.c > 0) return;
+  const now = new Date().toISOString();
+  const adminId = 'role-admin';
+  const userId = 'role-user';
+  sqlite
+    .prepare(
+      `INSERT INTO roles (id, name, description, priority, permissions, is_system, created_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`,
+    )
+    .run(adminId, 'admin', '系统管理员，拥有全部页面与操作权限', 1, JSON.stringify(['*']), now);
+  sqlite
+    .prepare(
+      `INSERT INTO roles (id, name, description, priority, permissions, is_system, created_at)
+       VALUES (?, ?, ?, ?, ?, 1, ?)`,
+    )
+    .run(
+      userId,
+      'user',
+      '普通用户，可访问用户端常规页面',
+      100,
+      JSON.stringify(['/', '/run', '/reviews', '/stats', '/profile']),
+      now,
+    );
 }
 
 /**

@@ -82,7 +82,9 @@ export function analyzeAst(source: string, filePath = 'reviewed.ts'): AstSummary
     true,
     scriptKindFor(filePath),
   );
-  const diagnostics = (parsedSource as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }).parseDiagnostics.map((diagnostic) => {
+  const diagnostics = (
+    parsedSource as ts.SourceFile & { parseDiagnostics: readonly ts.Diagnostic[] }
+  ).parseDiagnostics.map((diagnostic) => {
     const position = diagnostic.start ?? 0;
     const location = parsedSource.getLineAndCharacterOfPosition(position);
     return {
@@ -109,10 +111,15 @@ function intersectsChangedLines(start: number, end: number, changed: Set<number>
 }
 
 function stripComments(source: string): string {
-  return source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').trim();
+  return source
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '')
+    .trim();
 }
 
-function importedBindingNames(sourceFile: import('ts-morph').SourceFile): Array<{ name: string; line: number; text: string }> {
+function importedBindingNames(
+  sourceFile: import('ts-morph').SourceFile,
+): Array<{ name: string; line: number; text: string }> {
   return sourceFile.getImportDeclarations().flatMap((declaration) => {
     const line = declaration.getStartLineNumber();
     const text = declaration.getText().slice(0, 500);
@@ -128,14 +135,21 @@ function importedBindingNames(sourceFile: import('ts-morph').SourceFile): Array<
   });
 }
 
-function unusedImportFindings(file: FileContext, sourceFile: import('ts-morph').SourceFile, changed: Set<number>): Finding[] {
+function unusedImportFindings(
+  file: FileContext,
+  sourceFile: import('ts-morph').SourceFile,
+  changed: Set<number>,
+): Finding[] {
   const identifiers = sourceFile.getDescendantsOfKind(SyntaxKind.Identifier);
   return importedBindingNames(sourceFile)
     .filter((binding) => changed.has(binding.line))
-    .filter((binding) => identifiers.filter((identifier) => {
-      if (identifier.getText() !== binding.name) return false;
-      return identifier.getFirstAncestorByKind(SyntaxKind.ImportDeclaration) === undefined;
-    }).length === 0)
+    .filter(
+      (binding) =>
+        identifiers.filter((identifier) => {
+          if (identifier.getText() !== binding.name) return false;
+          return identifier.getFirstAncestorByKind(SyntaxKind.ImportDeclaration) === undefined;
+        }).length === 0,
+    )
     .map((binding) => ({
       agent: 'static' as const,
       severity: 'NIT' as const,
@@ -193,8 +207,10 @@ export function astFindings(files: readonly FileContext[]): Finding[] {
         lineStart: start,
         lineEnd: end,
         title: 'Empty catch block silently ignores errors',
-        description: 'The catch block does not record, rethrow, or otherwise handle the exception, which can hide failures.',
-        suggestion: 'Handle the error explicitly or add a documented reason for intentionally ignoring it.',
+        description:
+          'The catch block does not record, rethrow, or otherwise handle the exception, which can hide failures.',
+        suggestion:
+          'Handle the error explicitly or add a documented reason for intentionally ignoring it.',
         codeSnippet: block.getText().slice(0, 500),
         isFalsePositive: false,
       });

@@ -130,9 +130,7 @@ describe('complexityFindings', () => {
   });
 
   it('skips deleted files with empty staged content', () => {
-    const context = makeContext([
-      makeFileContext({ path: 'src/deleted.ts', stagedContent: '' }),
-    ]);
+    const context = makeContext([makeFileContext({ path: 'src/deleted.ts', stagedContent: '' })]);
     expect(complexityFindings(context.files, 1)).toEqual([]);
   });
 });

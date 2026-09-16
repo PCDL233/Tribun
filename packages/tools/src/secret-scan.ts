@@ -29,7 +29,8 @@ const SECRET_PATTERNS: readonly SecretPattern[] = [
   {
     name: 'Hardcoded credential assignment',
     // 不加前置 \b：dbPassword/apiKey 等驼峰命名内部无词边界；凭据后必须紧跟赋值与 8+ 字符字面量
-    pattern: /(password|passwd|api[_-]?key|api[_-]?secret|access[_-]?token|secret[_-]?key)\s*[:=]\s*['"][^'"\s]{8,}['"]/i,
+    pattern:
+      /(password|passwd|api[_-]?key|api[_-]?secret|access[_-]?token|secret[_-]?key)\s*[:=]\s*['"][^'"\s]{8,}['"]/i,
     severity: 'WARNING',
     cweId: 'CWE-798',
   },

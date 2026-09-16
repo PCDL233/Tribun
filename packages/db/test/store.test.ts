@@ -137,14 +137,20 @@ describe('ReviewStore', () => {
       ]);
       // 相同键以最新口径覆盖（insert or replace）
       store.saveCacheEntries('review-2', [
-        { cacheKey: 'key-a', findings: [finding, makeFinding({ title: 'second' })], tokenSaved: 800 },
+        {
+          cacheKey: 'key-a',
+          findings: [finding, makeFinding({ title: 'second' })],
+          tokenSaved: 800,
+        },
       ]);
 
       expect(store.getCachedFindings('key-a')).toHaveLength(2);
       expect(store.getCacheSummary()).toEqual({ entries: 1, tokenSaved: 800 });
 
       // 损坏条目按"未命中"降级（core 侧语义），不抛错不阻断
-      store['sqlite'].exec("UPDATE review_cache SET findings_json = '{broken' WHERE cache_key = 'key-a'");
+      store['sqlite'].exec(
+        "UPDATE review_cache SET findings_json = '{broken' WHERE cache_key = 'key-a'",
+      );
       expect(store.getCachedFindings('key-a')).toBeUndefined();
     } finally {
       store.close();

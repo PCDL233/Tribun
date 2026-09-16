@@ -22,7 +22,12 @@ export async function parseResponse<T>(schema: SchemaParser<T>, response: Respon
     let detail = bodyText;
     try {
       const parsed = JSON.parse(bodyText) as unknown;
-      if (typeof parsed === 'object' && parsed !== null && 'error' in parsed && typeof parsed.error === 'string') {
+      if (
+        typeof parsed === 'object' &&
+        parsed !== null &&
+        'error' in parsed &&
+        typeof parsed.error === 'string'
+      ) {
         detail = parsed.error;
       }
     } catch {

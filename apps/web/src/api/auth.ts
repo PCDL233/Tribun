@@ -8,6 +8,18 @@ const API_BASE = '/api/auth';
 const LogoutResponseSchema = z.object({ loggedOut: z.boolean() });
 const ChangePasswordResponseSchema = z.object({ changed: z.boolean() });
 
+/** 头像上传响应：返回更新后的用户对象 */
+export async function uploadAvatar(file: File): Promise<User> {
+  const formData = new FormData();
+  formData.append('avatar', file);
+  const response = await fetch(`${API_BASE}/avatar`, {
+    method: 'POST',
+    body: formData,
+  });
+  const body = await parseResponse(AuthResponseSchema, response);
+  return body.user;
+}
+
 /**
  * 查询当前登录用户。
  * 401 视为"未登录"这一正常状态返回 null，而非错误——路由守卫据此决定重定向。

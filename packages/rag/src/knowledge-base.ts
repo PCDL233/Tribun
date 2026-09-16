@@ -36,7 +36,19 @@ export class KnowledgeBaseError extends Error {
   }
 }
 
-const TEXT_EXTENSIONS = new Set(['.ts', '.tsx', '.js', '.jsx', '.py', '.go', '.java', '.md', '.txt', '.yml', '.yaml']);
+const TEXT_EXTENSIONS = new Set([
+  '.ts',
+  '.tsx',
+  '.js',
+  '.jsx',
+  '.py',
+  '.go',
+  '.java',
+  '.md',
+  '.txt',
+  '.yml',
+  '.yaml',
+]);
 /** 超过 1MB 的"文本"按二进制处理，避免锁文件/产物污染索引 */
 const MAX_FILE_BYTES = 1024 * 1024;
 
@@ -105,7 +117,10 @@ export class KnowledgeBase implements RagRetriever {
     }
 
     const table = await db.openTable('chunks');
-    const existingRows = (await table.query().select(['id', 'path', 'contentHash']).toArray()) as Array<{
+    const existingRows = (await table
+      .query()
+      .select(['id', 'path', 'contentHash'])
+      .toArray()) as Array<{
       id: string;
       path: string;
       contentHash: string;
@@ -118,15 +133,10 @@ export class KnowledgeBase implements RagRetriever {
       const existing = existingById.get(chunk.id);
       return existing === undefined || existing.contentHash !== chunk.contentHash;
     });
-    const removedIds = existingRows
-      .filter((row) => !chunksById.has(row.id))
-      .map((row) => row.id);
+    const removedIds = existingRows.filter((row) => !chunksById.has(row.id)).map((row) => row.id);
 
     // LanceDB 无 upsert：删除谓词覆盖"文件消失"与"内容变更"两类 id，变更块随后重新 add
-    const deletedIds = [
-      ...removedIds,
-      ...changed.map((chunk) => chunk.id),
-    ];
+    const deletedIds = [...removedIds, ...changed.map((chunk) => chunk.id)];
     if (deletedIds.length > 0) {
       // 删除谓词为 SQL 字符串：id 为受控生成的 path#index 形式，双引号转义后无注入面
       const predicate = deletedIds.map((id) => `id = "${id.replaceAll('"', '""')}"`).join(' OR ');
@@ -145,7 +155,10 @@ export class KnowledgeBase implements RagRetriever {
     }
 
     this.table = table;
-    const allRows = (await table.query().select(['id', 'path', 'kind', 'text']).toArray()) as Array<{
+    const allRows = (await table
+      .query()
+      .select(['id', 'path', 'kind', 'text'])
+      .toArray()) as Array<{
       id: string;
       path: string;
       kind: string;
@@ -198,10 +211,14 @@ export class KnowledgeBase implements RagRetriever {
     return rrfFuse(vectorHits, bm25Hits, topK, filter);
   }
 
-  private rebuildBm25(rows: ReadonlyArray<{ id: string; path: string; kind: string; text: string }>): void {
+  private rebuildBm25(
+    rows: ReadonlyArray<{ id: string; path: string; kind: string; text: string }>,
+  ): void {
     // MiniSearch 无持久化：全量重建（单机审查历史量级为毫秒级操作）
     this.bm25 = KnowledgeBase.createBm25();
-    this.bm25.addAll(rows.map((row) => ({ id: row.id, path: row.path, kind: row.kind, text: row.text })));
+    this.bm25.addAll(
+      rows.map((row) => ({ id: row.id, path: row.path, kind: row.kind, text: row.text })),
+    );
   }
 
   /** 递归遍历时跳过的目录：依赖、产物与版本库元数据不进索引 */

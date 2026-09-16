@@ -1,3 +1,4 @@
+import { z } from 'zod';
 import {
   ReviewListResponseSchema,
   ReviewReportDetailSchema,
@@ -11,8 +12,16 @@ import {
   AdminConfigResponseSchema,
   KnowledgeStatusResponseSchema,
   KnowledgeReindexResponseSchema,
+  FindingSchema,
 } from '@ai-review/shared/api';
-import type { AdminConfig, KnowledgeStatus, ReviewListItem, ReviewReportDetail, ReviewStats } from '@ai-review/shared/api';
+import type {
+  AdminConfig,
+  Finding,
+  KnowledgeStatus,
+  ReviewListItem,
+  ReviewReportDetail,
+  ReviewStats,
+} from '@ai-review/shared/api';
 import { parseResponse } from './parse-response.js';
 
 const API_BASE = '/api';
@@ -36,7 +45,11 @@ export async function fetchReviewPage(options: ReviewQueryOptions = {}): Promise
   pageSize: number;
 }> {
   const params = new URLSearchParams();
-  for (const [key, value] of Object.entries({ ...options, page: options.page ?? 1, pageSize: options.pageSize ?? 20 })) {
+  for (const [key, value] of Object.entries({
+    ...options,
+    page: options.page ?? 1,
+    pageSize: options.pageSize ?? 20,
+  })) {
     if (value !== undefined && value !== '') params.set(key, String(value));
   }
   const query = params.toString();
@@ -54,7 +67,11 @@ export async function fetchReviewDetail(reviewId: string): Promise<ReviewReportD
   );
 }
 
-export async function startReview(repoPath: string, mode: 'fast' | 'full', blockOn?: 'BLOCKER' | 'WARNING' | 'NIT'): Promise<string> {
+export async function startReview(
+  repoPath: string,
+  mode: 'fast' | 'full',
+  blockOn?: 'BLOCKER' | 'WARNING' | 'NIT',
+): Promise<string> {
   const response = await fetch(`${API_BASE}/reviews`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
@@ -76,41 +93,59 @@ export async function markFalsePositive(
   await parseResponse(FalsePositiveResponseSchema, response);
 }
 
-export async function fetchStats(options: { from?: string; to?: string } = {}): Promise<ReviewStats> {
+export async function fetchStats(
+  options: { from?: string; to?: string } = {},
+): Promise<ReviewStats> {
   const params = new URLSearchParams();
   if (options.from !== undefined) params.set('from', options.from);
   if (options.to !== undefined) params.set('to', options.to);
   const query = params.toString();
-  const body = await parseResponse(ReviewStatsResponseSchema, await fetch(`${API_BASE}/stats${query === '' ? '' : `?${query}`}`));
+  const body = await parseResponse(
+    ReviewStatsResponseSchema,
+    await fetch(`${API_BASE}/stats${query === '' ? '' : `?${query}`}`),
+  );
   return body.stats;
 }
 
-
 export async function fetchReviewDiff(reviewId: string): Promise<string | null> {
-  const body = await parseResponse(ReviewDiffResponseSchema, await fetch(`${API_BASE}/reviews/${encodeURIComponent(reviewId)}/diff`));
+  const body = await parseResponse(
+    ReviewDiffResponseSchema,
+    await fetch(`${API_BASE}/reviews/${encodeURIComponent(reviewId)}/diff`),
+  );
   return body.diffText;
 }
 
 export async function rerunReview(reviewId: string): Promise<string> {
-  const body = await parseResponse(RerunReviewResponseSchema, await fetch(`${API_BASE}/reviews/${encodeURIComponent(reviewId)}/rerun`, { method: 'POST' }));
+  const body = await parseResponse(
+    RerunReviewResponseSchema,
+    await fetch(`${API_BASE}/reviews/${encodeURIComponent(reviewId)}/rerun`, { method: 'POST' }),
+  );
   return body.reviewId;
 }
 
 export async function cancelReview(reviewId: string): Promise<void> {
-  await parseResponse(CancelReviewResponseSchema, await fetch(`${API_BASE}/reviews/${encodeURIComponent(reviewId)}/cancel`, { method: 'POST' }));
+  await parseResponse(
+    CancelReviewResponseSchema,
+    await fetch(`${API_BASE}/reviews/${encodeURIComponent(reviewId)}/cancel`, { method: 'POST' }),
+  );
 }
 
 export async function deleteReview(reviewId: string): Promise<void> {
-  await parseResponse(DeleteReviewResponseSchema, await fetch(`${API_BASE}/reviews/${encodeURIComponent(reviewId)}`, { method: 'DELETE' }));
+  await parseResponse(
+    DeleteReviewResponseSchema,
+    await fetch(`${API_BASE}/reviews/${encodeURIComponent(reviewId)}`, { method: 'DELETE' }),
+  );
 }
 
 export function reviewExportUrl(reviewId: string, format: 'markdown' | 'html' | 'json'): string {
   return `${API_BASE}/reviews/${encodeURIComponent(reviewId)}/export?format=${format}`;
 }
 
-
 export async function fetchAdminConfig(): Promise<AdminConfig> {
-  const body = await parseResponse(AdminConfigResponseSchema, await fetch(`${API_BASE}/admin/config`));
+  const body = await parseResponse(
+    AdminConfigResponseSchema,
+    await fetch(`${API_BASE}/admin/config`),
+  );
   return body.config;
 }
 
@@ -127,7 +162,10 @@ export async function updateAdminConfig(config: AdminConfig): Promise<AdminConfi
 }
 
 export async function fetchKnowledgeStatus(): Promise<KnowledgeStatus> {
-  const body = await parseResponse(KnowledgeStatusResponseSchema, await fetch(`${API_BASE}/admin/knowledge`));
+  const body = await parseResponse(
+    KnowledgeStatusResponseSchema,
+    await fetch(`${API_BASE}/admin/knowledge`),
+  );
   return body.knowledge;
 }
 
@@ -136,4 +174,67 @@ export async function reindexKnowledge(): Promise<void> {
     KnowledgeReindexResponseSchema,
     await fetch(`${API_BASE}/admin/knowledge/reindex`, { method: 'POST' }),
   );
+}
+
+const SecretScanResponseSchema = z.object({ findings: z.array(FindingSchema) });
+const ComplexityResponseSchema = z.object({
+  functions: z.array(
+    z.object({
+      name: z.string(),
+      line: z.number(),
+      endLine: z.number(),
+      complexity: z.number(),
+      params: z.array(z.string()),
+      isAsync: z.boolean(),
+    }),
+  ),
+});
+
+export async function scanSecrets(diffText: string): Promise<Finding[]> {
+  const body = await parseResponse(
+    SecretScanResponseSchema,
+    await fetch(`${API_BASE}/admin/tools/secret-scan`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ diffText }),
+    }),
+  );
+  return body.findings;
+}
+
+export type FunctionMetrics = {
+  name: string;
+  line: number;
+  endLine: number;
+  complexity: number;
+  params: string[];
+  isAsync: boolean;
+};
+
+export async function analyzeComplexity(
+  source: string,
+  threshold?: number,
+): Promise<FunctionMetrics[]> {
+  const body = await parseResponse(
+    ComplexityResponseSchema,
+    await fetch(`${API_BASE}/admin/tools/complexity`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ source, ...(threshold !== undefined ? { threshold } : {}) }),
+    }),
+  );
+  return body.functions;
+}
+
+export async function fetchHookScript(): Promise<string> {
+  const response = await fetch(`${API_BASE}/admin/tools/hook-script`);
+  return response.text();
+}
+
+export async function initializeConfig(): Promise<AdminConfig> {
+  const body = await parseResponse(
+    AdminConfigResponseSchema,
+    await fetch(`${API_BASE}/admin/init-config`, { method: 'POST' }),
+  );
+  return body.config;
 }

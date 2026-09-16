@@ -1,13 +1,31 @@
 import { useNavigate } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
-import { useQuery } from '@tanstack/react-query';
-import { ArrowRightOutlined, BarChartOutlined, HistoryOutlined, PlayCircleOutlined } from '@ant-design/icons';
-import { Button, Card, Col, Row, Space, Statistic, Table, Tag, Typography } from 'antd';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import {
+  ArrowRightOutlined,
+  BarChartOutlined,
+  HistoryOutlined,
+  PlayCircleOutlined,
+} from '@ant-design/icons';
+import {
+  App as AntdApp,
+  Button,
+  Card,
+  Col,
+  Popconfirm,
+  Row,
+  Space,
+  Statistic,
+  Table,
+  Tag,
+  Typography,
+} from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import type { ReviewListItem } from '@ai-review/shared/api';
-import { fetchReviews, fetchStats } from '../api';
+import { deleteReview, fetchReviews, fetchStats } from '../api';
 import { describeError } from '../parse-response';
 import { useAuth } from '../hooks/use-auth';
+import { formatDateTime } from '../format';
 import { CardHeading, PageHeader } from '../components/PageHeader';
 
 function formatCount(value: number): string {
@@ -15,10 +33,21 @@ function formatCount(value: number): string {
 }
 
 export function HomePage(): ReactElement {
+  const { message } = AntdApp.useApp();
   const { user } = useAuth();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const statsQuery = useQuery({ queryKey: ['stats'], queryFn: () => fetchStats() });
   const reviewsQuery = useQuery({ queryKey: ['reviews'], queryFn: () => fetchReviews() });
+  const deleteMutation = useMutation({
+    mutationFn: (reviewId: string) => deleteReview(reviewId),
+    onSuccess: () => {
+      void message.success('审查记录已删除');
+      void queryClient.invalidateQueries({ queryKey: ['reviews'] });
+      void queryClient.invalidateQueries({ queryKey: ['stats'] });
+    },
+    onError: (e) => void message.error(describeError(e)),
+  });
 
   const recentColumns: ColumnsType<ReviewListItem> = [
     {
@@ -55,7 +84,24 @@ export function HomePage(): ReactElement {
           <Tag color="success">无阻断</Tag>
         ),
     },
-    { title: '时间', dataIndex: 'createdAt', width: 180 },
+    { title: '时间', dataIndex: 'createdAt', width: 180, render: (v: string) => formatDateTime(v) },
+    ...(user?.role === 'admin'
+      ? [
+          {
+            title: '操作',
+            key: 'actions',
+            width: 90,
+            render: (_: unknown, record: ReviewListItem) => (
+              <Popconfirm
+                title="确认删除该审查记录？"
+                onConfirm={() => deleteMutation.mutate(record.reviewId)}
+              >
+                <Typography.Link type="danger">删除</Typography.Link>
+              </Popconfirm>
+            ),
+          },
+        ]
+      : []),
   ];
 
   return (
@@ -64,23 +110,35 @@ export function HomePage(): ReactElement {
         eyebrow="Workspace"
         title="工作台"
         description="查看团队审查概况，发起新的代码审查，或继续跟进最近的风险发现。"
-        actions={<Button type="primary" icon={<PlayCircleOutlined />} onClick={() => void navigate({ to: '/run' })}>发起审查</Button>}
+        actions={
+          <Button
+            type="primary"
+            icon={<PlayCircleOutlined />}
+            onClick={() => void navigate({ to: '/run' })}
+          >
+            发起审查
+          </Button>
+        }
       />
 
       <Card className="surface-card welcome-card">
         <div>
-          <Typography.Title level={3} className="welcome-title">欢迎回来，{user?.username ?? '当前用户'}</Typography.Title>
-          <Typography.Paragraph className="welcome-description">
-            通过统一的 Diff、静态分析和模型审查结果，在合并前快速确认代码质量。
-          </Typography.Paragraph>
+          <Typography.Title level={3} className="welcome-title">
+            欢迎回来，{user?.username ?? '当前用户'}
+          </Typography.Title>
           <Space wrap>
-            <Button type="primary" onClick={() => void navigate({ to: '/run' })}>开始审查</Button>
+            <Button type="primary" onClick={() => void navigate({ to: '/run' })}>
+              开始审查
+            </Button>
             <Button onClick={() => void navigate({ to: '/reviews' })}>查看历史报告</Button>
           </Space>
         </div>
         <div className="welcome-summary">
-          <Statistic title="累计审查" value={statsQuery.data?.totalReviews ?? 0} loading={statsQuery.isPending} />
-          <Typography.Text type="secondary">持续积累可追踪的质量数据</Typography.Text>
+          <Statistic
+            title="累计审查"
+            value={statsQuery.data?.totalReviews ?? 0}
+            loading={statsQuery.isPending}
+          />
         </div>
       </Card>
 
@@ -99,7 +157,6 @@ export function HomePage(): ReactElement {
                 value={statsQuery.data?.totalReviews ?? 0}
                 loading={statsQuery.isPending}
               />
-              <div className="stat-caption">累计完成的审查任务</div>
             </Card>
           </Col>
           <Col xs={12} lg={6}>
@@ -109,7 +166,6 @@ export function HomePage(): ReactElement {
                 value={statsQuery.data?.totalFindings ?? 0}
                 loading={statsQuery.isPending}
               />
-              <div className="stat-caption">覆盖多个风险等级</div>
             </Card>
           </Col>
           <Col xs={12} lg={6}>
@@ -121,7 +177,6 @@ export function HomePage(): ReactElement {
                 suffix="/100"
                 loading={statsQuery.isPending}
               />
-              <div className="stat-caption">分数越低代表越稳健</div>
             </Card>
           </Col>
           <Col xs={12} lg={6}>
@@ -132,7 +187,6 @@ export function HomePage(): ReactElement {
                 formatter={(value) => formatCount(Number(value))}
                 loading={statsQuery.isPending}
               />
-              <div className="stat-caption">AI 审查资源使用量</div>
             </Card>
           </Col>
         </Row>
@@ -141,17 +195,29 @@ export function HomePage(): ReactElement {
       <Card className="surface-card" title={<CardHeading title="常用操作" />}>
         <Row gutter={[12, 12]}>
           <Col xs={24} md={8}>
-            <Button block icon={<PlayCircleOutlined />} onClick={() => void navigate({ to: '/run' })}>
+            <Button
+              block
+              icon={<PlayCircleOutlined />}
+              onClick={() => void navigate({ to: '/run' })}
+            >
               发起一次新审查
             </Button>
           </Col>
           <Col xs={24} md={8}>
-            <Button block icon={<HistoryOutlined />} onClick={() => void navigate({ to: '/reviews' })}>
+            <Button
+              block
+              icon={<HistoryOutlined />}
+              onClick={() => void navigate({ to: '/reviews' })}
+            >
               浏览历史报告
             </Button>
           </Col>
           <Col xs={24} md={8}>
-            <Button block icon={<BarChartOutlined />} onClick={() => void navigate({ to: '/stats' })}>
+            <Button
+              block
+              icon={<BarChartOutlined />}
+              onClick={() => void navigate({ to: '/stats' })}
+            >
               查看统计分析
             </Button>
           </Col>
@@ -162,7 +228,11 @@ export function HomePage(): ReactElement {
         className="surface-card data-table-card"
         title={<CardHeading title="最近审查" />}
         extra={
-          <Button type="link" icon={<ArrowRightOutlined />} onClick={() => void navigate({ to: '/reviews' })}>
+          <Button
+            type="link"
+            icon={<ArrowRightOutlined />}
+            onClick={() => void navigate({ to: '/reviews' })}
+          >
             查看全部
           </Button>
         }

@@ -112,11 +112,9 @@ const CORPUS: readonly BenchmarkCase[] = [
     id: 'clean-utility',
     cwe: '',
     defective: false,
-    content: [
-      'export function add(a: number, b: number): number {',
-      '  return a + b;',
-      '}',
-    ].join('\n'),
+    content: ['export function add(a: number, b: number): number {', '  return a + b;', '}'].join(
+      '\n',
+    ),
   },
   {
     id: 'clean-placeholder-config',
@@ -140,7 +138,9 @@ describe('static-analysis benchmark (方案 4.2 评估指标)', () => {
   });
 
   // 发现按文件归属到语料用例（缺陷文件的发现计为真阳性，纯净文件的发现计为误报）
-  const caseByPath = new Map(CORPUS.map((benchmarkCase) => [`fixtures/${benchmarkCase.id}.ts`, benchmarkCase]));
+  const caseByPath = new Map(
+    CORPUS.map((benchmarkCase) => [`fixtures/${benchmarkCase.id}.ts`, benchmarkCase]),
+  );
   const detectedCases = new Set(
     findings.flatMap((finding) => {
       const benchmarkCase = caseByPath.get(finding.filePath);
@@ -161,7 +161,11 @@ describe('static-analysis benchmark (方案 4.2 评估指标)', () => {
     // 4 个缺陷用例均应被确定性规则命中（3 组密钥规则 + 复杂度阈值 15，规范 §3.1）
     expect(recall).toBeGreaterThanOrEqual(0.6);
     expect(detectedCases).toEqual(
-      new Set(CORPUS.filter((benchmarkCase) => benchmarkCase.defective).map((benchmarkCase) => benchmarkCase.id)),
+      new Set(
+        CORPUS.filter((benchmarkCase) => benchmarkCase.defective).map(
+          (benchmarkCase) => benchmarkCase.id,
+        ),
+      ),
     );
   });
 

@@ -9,7 +9,13 @@ import { StoreError } from '@ai-review/db';
 import {
   AdminOverviewResponseSchema,
   AdminUserPatchSchema,
+  AdminCreateUserSchema,
+  AuthResponseSchema,
   UserListResponseSchema,
+  RoleInputSchema,
+  RoleListResponseSchema,
+  RoleResponseSchema,
+  AssignRolesSchema,
   ReviewListQuerySchema,
   ReviewStatsQuerySchema,
   ReviewDiffResponseSchema,
@@ -22,9 +28,18 @@ import {
   KnowledgeStatusResponseSchema,
 } from '@ai-review/shared';
 import { renderHtml, renderJson, renderMarkdown } from '@ai-review/report';
-import { createRequireAuth, generateRandomPassword, hashPassword, registerAuthRoutes, requireAdmin } from './auth.js';
+import { analyzeComplexity, scanDiffTextForSecrets } from '@ai-review/tools';
+import {
+  createRequireAuth,
+  generateRandomPassword,
+  hashPassword,
+  registerAuthRoutes,
+  requireAnyPermission,
+  requirePermission,
+} from './auth.js';
 import type { ReviewMetrics } from './metrics.js';
 import type { ReviewStageEvent } from './review-service.js';
+import { AvatarError, AvatarStore, AVATAR_MAX_BYTES } from './avatar.js';
 import type { ReviewService } from './review-service.js';
 
 /** POST /api/reviews 入参（方案 2.3：API 入参经 zod 校验） */
@@ -51,6 +66,8 @@ export type AppDeps = {
   configPath?: string;
   /** 可选知识库管理器，未装配时返回 idle 状态 */
   knowledge?: KnowledgeManager;
+  /** 可选头像存储；未装配时头像上传返回 503 */
+  avatars?: AvatarStore;
 };
 
 export type KnowledgeManager = {
@@ -101,6 +118,10 @@ class EventQueue<T> {
  * - POST /api/admin/users/:id/reset-password  重置密码（admin）
  * - DELETE /api/admin/users/:id  删除用户（admin）
  * - GET  /api/admin/overview   系统概览聚合（admin）
+ * - POST /api/admin/init-config 生成默认配置文件（admin）
+ * - POST /api/admin/tools/secret-scan diff 密钥扫描（admin）
+ * - POST /api/admin/tools/complexity 源码复杂度扫描（admin）
+ * - GET  /api/admin/tools/hook-script 获取 pre-commit hook 脚本（admin）
  * - GET  /metrics              Prometheus 指标（admin）
  */
 export function buildApp(deps: AppDeps): Hono<AppEnv> {
@@ -116,15 +137,72 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     return requireAuth(c, next);
   });
 
+  // 头像上传：仅本人（requireAuth），multipart 表单字段名为 avatar。
+  // /api/auth/* 被上方全局中间件放行，故在此显式挂 requireAuth。
+  app.post('/api/auth/avatar', createRequireAuth({ users: deps.users }), async (c) => {
+    if (deps.avatars === undefined) {
+      return c.json({ error: 'avatar storage is not configured' }, 503);
+    }
+    let body: FormData;
+    try {
+      body = await c.req.formData();
+    } catch {
+      return c.json({ error: 'invalid multipart body' }, 400);
+    }
+    const file = body.get('avatar');
+    if (!(file instanceof File)) {
+      return c.json({ error: 'avatar file is required (field: avatar)' }, 400);
+    }
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (bytes.byteLength > AVATAR_MAX_BYTES) {
+      return c.json({ error: 'avatar must be <= 2MB' }, 413);
+    }
+    try {
+      deps.avatars.save(c.get('user').id, bytes);
+    } catch (e) {
+      if (e instanceof AvatarError) return c.json({ error: e.message }, 400);
+      throw e;
+    }
+    deps.users.setAvatarUrl(c.get('user').id, `/api/users/${c.get('user').id}/avatar`);
+    const user = deps.users.getById(c.get('user').id);
+    if (user === undefined) return c.json({ error: 'user not found' }, 404);
+    return c.json(AuthResponseSchema.parse({ user }));
+  });
+
+  // 头像读取：登录可见（业务侧可读任何用户头像，供后台列表展示）
+  app.get('/api/users/:id/avatar', (c) => {
+    if (deps.avatars === undefined)
+      return c.json({ error: 'avatar storage is not configured' }, 503);
+    const target = deps.users.getById(c.req.param('id'));
+    if (target === undefined || target.avatarUrl === null)
+      return c.json({ error: 'avatar not found' }, 404);
+    const avatar = deps.avatars.read(target.id);
+    if (avatar === null) return c.json({ error: 'avatar not found' }, 404);
+    return c.body(avatar.buffer, 200, {
+      'content-type': avatar.mime,
+      'cache-control': 'no-store',
+    });
+  });
+
   // Prometheus 拉取端点：仅 admin 可读（审查量与 token 成本属团队敏感数据）
-  app.get('/metrics', requireAuth, requireAdmin, async (c) =>
+  app.get('/metrics', requireAuth, requirePermission('/admin/metrics'), async (c) =>
     c.text(await deps.metrics.render(), 200, { 'content-type': 'text/plain; version=0.0.4' }),
   );
 
   app.post('/api/reviews', zValidator('json', StartReviewSchema), (c) => {
     const { repoPath, mode, blockOn } = c.req.valid('json');
     const createdBy = c.get('user').id;
-    return c.json({ reviewId: deps.service.startReview({ repoPath, mode, createdBy, ...(blockOn === undefined ? {} : { blockOn }) }) }, 202);
+    return c.json(
+      {
+        reviewId: deps.service.startReview({
+          repoPath,
+          mode,
+          createdBy,
+          ...(blockOn === undefined ? {} : { blockOn }),
+        }),
+      },
+      202,
+    );
   });
 
   // 数据隔离：admin 可见全部；普通用户仅见本人发起的记录，筛选与分页在数据库侧完成
@@ -132,7 +210,10 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const current = c.get('user');
     const queryParams = c.req.query();
     const query = c.req.valid('query');
-    const page = deps.store.listReviewPage(query, current.role === 'admin' ? undefined : current.id);
+    const page = deps.store.listReviewPage(
+      query,
+      current.role === 'admin' ? undefined : current.id,
+    );
     // 保留无参数旧客户端的响应形状；显式分页参数使用完整分页契约。
     if (Object.keys(queryParams).length === 0) return c.json({ reviews: page.reviews });
     return c.json(page);
@@ -141,7 +222,8 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   app.get('/api/reviews/:id/diff', (c) => {
     const current = c.get('user');
     const reviewId = c.req.param('id');
-    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    if (!canAccessReview(deps, current, reviewId))
+      return c.json({ error: 'review not found' }, 404);
     try {
       return c.json(ReviewDiffResponseSchema.parse({ diffText: deps.store.getDiff(reviewId) }));
     } catch (e) {
@@ -153,7 +235,8 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   app.post('/api/reviews/:id/rerun', (c) => {
     const current = c.get('user');
     const reviewId = c.req.param('id');
-    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    if (!canAccessReview(deps, current, reviewId))
+      return c.json({ error: 'review not found' }, 404);
     try {
       return c.json({ reviewId: deps.service.rerunReview(reviewId, current.id) }, 202);
     } catch (e) {
@@ -165,29 +248,44 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   app.post('/api/reviews/:id/cancel', (c) => {
     const current = c.get('user');
     const reviewId = c.req.param('id');
-    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
-    if (!deps.service.cancelReview(reviewId)) return c.json({ error: 'review is not running' }, 409);
+    if (!canAccessReview(deps, current, reviewId))
+      return c.json({ error: 'review not found' }, 404);
+    if (!deps.service.cancelReview(reviewId))
+      return c.json({ error: 'review is not running' }, 409);
     return c.json(CancelReviewResponseSchema.parse({ cancelled: true }));
   });
 
   app.delete('/api/reviews/:id', (c) => {
     const current = c.get('user');
     const reviewId = c.req.param('id');
-    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    if (!canAccessReview(deps, current, reviewId))
+      return c.json({ error: 'review not found' }, 404);
     return c.json(DeleteReviewResponseSchema.parse({ deleted: deps.store.deleteReview(reviewId) }));
   });
 
   app.get('/api/reviews/:id/export', (c) => {
     const current = c.get('user');
     const reviewId = c.req.param('id');
-    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    if (!canAccessReview(deps, current, reviewId))
+      return c.json({ error: 'review not found' }, 404);
     const format = c.req.query('format') ?? 'markdown';
-    if (format !== 'markdown' && format !== 'json' && format !== 'html') return c.json({ error: 'format must be markdown, html or json' }, 400);
+    if (format !== 'markdown' && format !== 'json' && format !== 'html')
+      return c.json({ error: 'format must be markdown, html or json' }, 400);
     try {
       const report = deps.store.getReportDetail(reviewId);
-      const body = format === 'json' ? renderJson(report) : format === 'html' ? renderHtml(report) : renderMarkdown(report);
+      const body =
+        format === 'json'
+          ? renderJson(report)
+          : format === 'html'
+            ? renderHtml(report)
+            : renderMarkdown(report);
       return c.body(body, 200, {
-        'content-type': format === 'json' ? 'application/json; charset=utf-8' : format === 'html' ? 'text/html; charset=utf-8' : 'text/markdown; charset=utf-8',
+        'content-type':
+          format === 'json'
+            ? 'application/json; charset=utf-8'
+            : format === 'html'
+              ? 'text/html; charset=utf-8'
+              : 'text/markdown; charset=utf-8',
         'content-disposition': `attachment; filename="${reviewId}.${format === 'json' ? 'json' : format === 'html' ? 'html' : 'md'}"`,
       });
     } catch (e) {
@@ -200,17 +298,15 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const current = c.get('user');
     const query = c.req.valid('query');
     return c.json({
-      stats: deps.store.getStats(
-        current.role === 'admin' ? undefined : current.id,
-        query,
-      ),
+      stats: deps.store.getStats(current.role === 'admin' ? undefined : current.id, query),
     });
   });
 
   app.get('/api/reviews/:id', (c) => {
     const current = c.get('user');
     const reviewId = c.req.param('id');
-    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    if (!canAccessReview(deps, current, reviewId))
+      return c.json({ error: 'review not found' }, 404);
     try {
       return c.json(deps.store.getReportDetail(reviewId));
     } catch (e) {
@@ -239,7 +335,8 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   app.get('/api/reviews/:id/events', (c) => {
     const current = c.get('user');
     const reviewId = c.req.param('id');
-    if (!canAccessReview(deps, current, reviewId)) return c.json({ error: 'review not found' }, 404);
+    if (!canAccessReview(deps, current, reviewId))
+      return c.json({ error: 'review not found' }, 404);
 
     const queue = new EventQueue<ReviewStageEvent>();
     const unsubscribe = deps.service.subscribe(reviewId, (event) => queue.push(event));
@@ -268,58 +365,212 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   });
 
   // —— 管理员后台（配置、知识库、用户管理、系统概览）——
-  app.get('/api/admin/config', requireAdmin, (c) => {
+  app.get('/api/admin/config', requireAnyPermission('/admin/config', '/admin/ai'), (c) => {
     const configPath = deps.configPath ?? '.ai-review.yml';
     const config = readAdminConfig(configPath);
     return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(config) }));
   });
 
-  app.put('/api/admin/config', requireAdmin, zValidator('json', AdminConfigSchema), (c) => {
-    const config = c.req.valid('json');
+  app.put(
+    '/api/admin/config',
+    requireAnyPermission('/admin/config', '/admin/ai'),
+    zValidator('json', AdminConfigSchema),
+    (c) => {
+      const config = c.req.valid('json');
+      const configPath = deps.configPath ?? '.ai-review.yml';
+      const current = readAdminConfig(configPath);
+      const persisted =
+        config.llm.apiKey === '********'
+          ? { ...config, llm: { ...config.llm, apiKey: current.llm.apiKey } }
+          : config;
+      writeFileSync(configPath, stringifyYaml(persisted), 'utf8');
+      return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(persisted) }));
+    },
+  );
+
+  app.post('/api/admin/init-config', requirePermission('/admin/init'), (c) => {
     const configPath = deps.configPath ?? '.ai-review.yml';
-    const current = readAdminConfig(configPath);
-    const persisted = config.llm.apiKey === '********'
-      ? { ...config, llm: { ...config.llm, apiKey: current.llm.apiKey } }
-      : config;
-    writeFileSync(configPath, stringifyYaml(persisted), 'utf8');
-    return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(persisted) }));
+    if (existsSync(configPath)) {
+      return c.json({ error: 'config file already exists' }, 409);
+    }
+    const config = AiReviewConfigSchema.parse({});
+    writeFileSync(configPath, stringifyYaml(config), 'utf8');
+    return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(config) }));
   });
 
-  app.get('/api/admin/knowledge', requireAdmin, async (c) => {
-    const status = deps.knowledge === undefined
-      ? defaultKnowledgeStatus(deps.configPath ?? '.ai-review.yml')
-      : await deps.knowledge.getStatus();
+  app.post(
+    '/api/admin/tools/secret-scan',
+    requirePermission('/admin/tools'),
+    zValidator('json', z.object({ diffText: z.string() })),
+    (c) => {
+      const { diffText } = c.req.valid('json');
+      return c.json({ findings: scanDiffTextForSecrets(diffText) });
+    },
+  );
+
+  app.post(
+    '/api/admin/tools/complexity',
+    requirePermission('/admin/tools'),
+    zValidator(
+      'json',
+      z.object({ source: z.string(), threshold: z.coerce.number().int().min(1).optional() }),
+    ),
+    (c) => {
+      const { source, threshold } = c.req.valid('json');
+      return c.json({ functions: analyzeComplexity(source, threshold) });
+    },
+  );
+
+  app.get('/api/admin/tools/hook-script', requirePermission('/admin/hook'), (c) => {
+    const script = [
+      '# ai-review pre-commit hook (husky v9, Windows/macOS/Linux universal)',
+      '# fast mode target <= 15s; BLOCKER findings block the commit',
+      'ai-review run --staged --mode fast --block-on BLOCKER',
+      '',
+    ].join('\n');
+    return c.text(script);
+  });
+
+  app.get('/api/admin/knowledge', requirePermission('/admin/knowledge'), async (c) => {
+    const status =
+      deps.knowledge === undefined
+        ? defaultKnowledgeStatus(deps.configPath ?? '.ai-review.yml')
+        : await deps.knowledge.getStatus();
     return c.json(KnowledgeStatusResponseSchema.parse({ knowledge: status }));
   });
 
-  app.post('/api/admin/knowledge/reindex', requireAdmin, (c) => {
-    if (deps.knowledge === undefined) return c.json({ error: 'knowledge manager is not configured' }, 503);
+  app.post('/api/admin/knowledge/reindex', requirePermission('/admin/knowledge'), (c) => {
+    if (deps.knowledge === undefined)
+      return c.json({ error: 'knowledge manager is not configured' }, 503);
     void deps.knowledge.reindex().catch(() => undefined);
     return c.json(KnowledgeReindexResponseSchema.parse({ accepted: true }), 202);
   });
 
-  app.get('/api/admin/users', requireAdmin, (c) => {
+  app.get('/api/admin/users', requirePermission('/admin/users'), (c) => {
     return c.json(UserListResponseSchema.parse({ users: deps.users.listUsers() }));
   });
 
-  app.patch('/api/admin/users/:id', requireAdmin, zValidator('json', AdminUserPatchSchema), (c) => {
-    const targetId = c.req.param('id');
-    const current = c.get('user');
-    const patch = c.req.valid('json');
-    // 防自锁：唯一操作人不可自降权限或自禁用（admin 数量判定交给列表页展示，此处守住直接风险）
-    if (targetId === current.id && (patch.role === 'user' || patch.status === 'disabled')) {
-      return c.json({ error: 'cannot demote or disable your own account' }, 400);
-    }
-    let updated = false;
-    if (patch.role !== undefined) updated = deps.users.updateUserRole(targetId, patch.role);
-    if (patch.status !== undefined) updated = deps.users.setUserStatus(targetId, patch.status);
-    if (!updated) return c.json({ error: 'user not found' }, 404);
-    const nextUser = deps.users.getById(targetId);
-    if (nextUser === undefined) return c.json({ error: 'user not found' }, 404);
-    return c.json({ user: nextUser });
+  app.post(
+    '/api/admin/users',
+    requirePermission('/admin/users'),
+    zValidator('json', AdminCreateUserSchema),
+    async (c) => {
+      const { username, password } = c.req.valid('json');
+      let user: SafeUser;
+      try {
+        // 管理员代办创建：固定为普通用户角色
+        user = deps.users.createUser({
+          username,
+          passwordHash: await hashPassword(password),
+          role: 'user',
+        });
+      } catch (e) {
+        if (e instanceof StoreError) return c.json({ error: e.message }, 409);
+        throw e;
+      }
+      return c.json(AuthResponseSchema.parse({ user }), 201);
+    },
+  );
+
+  // —— 角色管理（RBAC）：拥有角色管理权限即可 ——
+  app.get('/api/admin/roles', requirePermission('/admin/roles'), (c) => {
+    return c.json(RoleListResponseSchema.parse({ roles: deps.users.listRoles() }));
   });
 
-  app.post('/api/admin/users/:id/reset-password', requireAdmin, async (c) => {
+  app.post(
+    '/api/admin/roles',
+    requirePermission('/admin/roles'),
+    zValidator('json', RoleInputSchema),
+    (c) => {
+      const input = c.req.valid('json');
+      try {
+        const role = deps.users.createRole({
+          name: input.name,
+          description: input.description ?? null,
+          priority: input.priority,
+          permissions: input.permissions,
+        });
+        return c.json(RoleResponseSchema.parse({ role }), 201);
+      } catch (e) {
+        if (e instanceof StoreError) return c.json({ error: e.message }, 409);
+        throw e;
+      }
+    },
+  );
+
+  app.put(
+    '/api/admin/roles/:id',
+    requirePermission('/admin/roles'),
+    zValidator('json', RoleInputSchema),
+    (c) => {
+      const input = c.req.valid('json');
+      try {
+        const role = deps.users.updateRole(c.req.param('id'), {
+          name: input.name,
+          description: input.description ?? null,
+          priority: input.priority,
+          permissions: input.permissions,
+        });
+        if (role === undefined) return c.json({ error: 'role not found' }, 404);
+        return c.json(RoleResponseSchema.parse({ role }));
+      } catch (e) {
+        if (e instanceof StoreError) return c.json({ error: e.message }, 409);
+        throw e;
+      }
+    },
+  );
+
+  app.delete('/api/admin/roles/:id', requirePermission('/admin/roles'), (c) => {
+    try {
+      if (!deps.users.deleteRole(c.req.param('id'))) {
+        return c.json({ error: 'role not found' }, 404);
+      }
+      return c.json({ deleted: true });
+    } catch (e) {
+      if (e instanceof StoreError) return c.json({ error: e.message }, 400);
+      throw e;
+    }
+  });
+
+  // 给用户分配角色（整体替换）
+  app.put(
+    '/api/admin/users/:id/roles',
+    requirePermission('/admin/users'),
+    zValidator('json', AssignRolesSchema),
+    (c) => {
+      const { roleIds } = c.req.valid('json');
+      if (!deps.users.assignRoles(c.req.param('id'), roleIds)) {
+        return c.json({ error: 'user not found' }, 404);
+      }
+      const user = deps.users.getById(c.req.param('id'));
+      if (user === undefined) return c.json({ error: 'user not found' }, 404);
+      return c.json(AuthResponseSchema.parse({ user }));
+    },
+  );
+
+  app.patch(
+    '/api/admin/users/:id',
+    requirePermission('/admin/users'),
+    zValidator('json', AdminUserPatchSchema),
+    (c) => {
+      const targetId = c.req.param('id');
+      const current = c.get('user');
+      const patch = c.req.valid('json');
+      // 防自锁：唯一操作人不可自降权限或自禁用（admin 数量判定交给列表页展示，此处守住直接风险）
+      if (targetId === current.id && (patch.role === 'user' || patch.status === 'disabled')) {
+        return c.json({ error: 'cannot demote or disable your own account' }, 400);
+      }
+      let updated = false;
+      if (patch.role !== undefined) updated = deps.users.updateUserRole(targetId, patch.role);
+      if (patch.status !== undefined) updated = deps.users.setUserStatus(targetId, patch.status);
+      if (!updated) return c.json({ error: 'user not found' }, 404);
+      const nextUser = deps.users.getById(targetId);
+      if (nextUser === undefined) return c.json({ error: 'user not found' }, 404);
+      return c.json({ user: nextUser });
+    },
+  );
+
+  app.post('/api/admin/users/:id/reset-password', requirePermission('/admin/users'), async (c) => {
     const targetId = c.req.param('id');
     const newPassword = generateRandomPassword();
     if (!deps.users.resetPassword(targetId, await hashPassword(newPassword))) {
@@ -330,7 +581,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     return c.json({ newPassword });
   });
 
-  app.delete('/api/admin/users/:id', requireAdmin, (c) => {
+  app.delete('/api/admin/users/:id', requirePermission('/admin/users'), (c) => {
     const targetId = c.req.param('id');
     if (targetId === c.get('user').id) {
       return c.json({ error: 'cannot delete your own account' }, 400);
@@ -339,16 +590,18 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     return c.json({ deleted: true });
   });
 
-  app.get('/api/admin/overview', requireAdmin, (c) => {
+  app.get('/api/admin/overview', requirePermission('/admin'), (c) => {
     const stats = deps.store.getStats();
     const cache = deps.store.getCacheSummary();
     const roleCounts = deps.users.getUserRoleCounts();
-    const recentFailures = deps.store.listReviewPage({ status: 'failed', page: 1, pageSize: 5 }).reviews.map((review) => ({
-      reviewId: review.reviewId,
-      repoPath: review.repoPath,
-      errorMessage: review.errorMessage,
-      createdAt: review.createdAt,
-    }));
+    const recentFailures = deps.store
+      .listReviewPage({ status: 'failed', page: 1, pageSize: 5 })
+      .reviews.map((review) => ({
+        reviewId: review.reviewId,
+        repoPath: review.repoPath,
+        errorMessage: review.errorMessage,
+        createdAt: review.createdAt,
+      }));
     const failedTotal = deps.store.listReviewPage({ status: 'failed', page: 1, pageSize: 1 }).total;
     return c.json(
       AdminOverviewResponseSchema.parse({
@@ -386,7 +639,9 @@ function readAdminConfig(path: string): ReturnType<typeof AiReviewConfigSchema.p
   return AiReviewConfigSchema.parse(parsed);
 }
 
-function maskApiKey(config: ReturnType<typeof AiReviewConfigSchema.parse>): ReturnType<typeof AiReviewConfigSchema.parse> {
+function maskApiKey(
+  config: ReturnType<typeof AiReviewConfigSchema.parse>,
+): ReturnType<typeof AiReviewConfigSchema.parse> {
   const apiKey = config.llm.apiKey;
   return {
     ...config,
@@ -423,5 +678,8 @@ function canAccessReview(
   reviewId: string,
 ): boolean {
   if (current.role === 'admin') return true;
-  return deps.store.getReviewOwner(reviewId) === current.id || deps.service.getReviewOwner(reviewId) === current.id;
+  return (
+    deps.store.getReviewOwner(reviewId) === current.id ||
+    deps.service.getReviewOwner(reviewId) === current.id
+  );
 }

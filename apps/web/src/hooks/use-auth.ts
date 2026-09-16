@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { UseMutationResult } from '@tanstack/react-query';
 import type { LoginInput, RegisterInput, User } from '@ai-review/shared/api';
-import { changePassword, fetchMe, login, logout, register } from '../api/auth';
+import { changePassword, fetchMe, login, logout, register, uploadAvatar } from '../api/auth';
 
 /** 认证状态的唯一查询键（路由守卫与组件共享） */
 export const AUTH_QUERY_KEY = ['auth'] as const;
@@ -44,6 +44,21 @@ export function useLogout(): UseMutationResult<void, Error, void> {
   });
 }
 
-export function useChangePassword(): UseMutationResult<void, Error, { oldPassword: string; newPassword: string }> {
+export function useChangePassword(): UseMutationResult<
+  void,
+  Error,
+  { oldPassword: string; newPassword: string }
+> {
   return useMutation({ mutationFn: changePassword });
+}
+
+export function useUploadAvatar(): UseMutationResult<User, Error, File> {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: uploadAvatar,
+    onSuccess: (user) => {
+      queryClient.setQueryData(AUTH_QUERY_KEY, user);
+      void queryClient.invalidateQueries({ queryKey: ['admin', 'users'] });
+    },
+  });
 }

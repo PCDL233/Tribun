@@ -1,13 +1,30 @@
 import type { ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Alert, Card, Col, Empty, List, Progress, Row, Skeleton, Statistic, Tag, Typography } from 'antd';
+import {
+  Alert,
+  Card,
+  Col,
+  Empty,
+  List,
+  Progress,
+  Row,
+  Skeleton,
+  Statistic,
+  Tag,
+  Typography,
+} from 'antd';
 import { fetchAdminOverview } from '../../api/admin';
 import { describeError } from '../../parse-response';
 import { CardHeading, PageHeader } from '../../components/PageHeader';
 
 export function AdminOverviewPage(): ReactElement {
   const overviewQuery = useQuery({ queryKey: ['admin', 'overview'], queryFn: fetchAdminOverview });
-  if (overviewQuery.isPending) return <Card className="surface-card"><Skeleton active paragraph={{ rows: 6 }} /></Card>;
+  if (overviewQuery.isPending)
+    return (
+      <Card className="surface-card">
+        <Skeleton active paragraph={{ rows: 6 }} />
+      </Card>
+    );
   if (overviewQuery.isError)
     return (
       <Alert
@@ -52,26 +69,40 @@ export function AdminOverviewPage(): ReactElement {
           <Card className="surface-card" title={<CardHeading title="运行健康度" />}>
             <Row gutter={[16, 16]}>
               <Col xs={12}>
-                <Statistic title="失败率" value={overview.failureRate * 100} precision={1} suffix="%" />
+                <Statistic
+                  title="失败率"
+                  value={overview.failureRate * 100}
+                  precision={1}
+                  suffix="%"
+                />
               </Col>
               <Col xs={12}>
-                <Statistic title="近 7 日审查" value={overview.riskTrend.reduce((sum, point) => sum + point.reviews, 0)} />
+                <Statistic
+                  title="近 7 日审查"
+                  value={overview.riskTrend.reduce((sum, point) => sum + point.reviews, 0)}
+                />
               </Col>
             </Row>
             <Typography.Paragraph type="secondary" style={{ margin: '20px 0 8px' }}>
               近 7 日平均风险分
             </Typography.Paragraph>
-            {overview.riskTrend.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无趋势数据" /> : overview.riskTrend.map((point) => (
-              <div key={point.date} className="admin-trend-row">
-                <Typography.Text type="secondary">{point.date}</Typography.Text>
-                <Progress percent={Math.round(point.avgRiskScore)} size="small" showInfo />
-              </div>
-            ))}
+            {overview.riskTrend.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无趋势数据" />
+            ) : (
+              overview.riskTrend.map((point) => (
+                <div key={point.date} className="admin-trend-row">
+                  <Typography.Text type="secondary">{point.date}</Typography.Text>
+                  <Progress percent={Math.round(point.avgRiskScore)} size="small" showInfo />
+                </div>
+              ))
+            )}
           </Card>
         </Col>
         <Col xs={24} lg={12}>
           <Card className="surface-card" title={<CardHeading title="最近失败审查" />}>
-            {overview.recentFailures.length === 0 ? <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无失败记录" /> : (
+            {overview.recentFailures.length === 0 ? (
+              <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description="暂无失败记录" />
+            ) : (
               <List
                 size="small"
                 dataSource={overview.recentFailures}
@@ -79,7 +110,14 @@ export function AdminOverviewPage(): ReactElement {
                   <List.Item>
                     <List.Item.Meta
                       title={<Typography.Text code>{failure.reviewId}</Typography.Text>}
-                      description={<Typography.Text type="secondary" ellipsis={{ tooltip: failure.errorMessage ?? '未记录失败原因' }}>{failure.errorMessage ?? '未记录失败原因'}</Typography.Text>}
+                      description={
+                        <Typography.Text
+                          type="secondary"
+                          ellipsis={{ tooltip: failure.errorMessage ?? '未记录失败原因' }}
+                        >
+                          {failure.errorMessage ?? '未记录失败原因'}
+                        </Typography.Text>
+                      }
                     />
                     <Tag color="error">失败</Tag>
                   </List.Item>

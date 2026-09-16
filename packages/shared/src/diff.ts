@@ -33,4 +33,5 @@ export type FileDiff = {
 };
 
 /** 变更类型分类（方案 3.1 classifyChange），供风险规划器降权与报告概述 */
-export type ChangeType = 'feature' | 'bugfix' | 'refactor' | 'test' | 'docs' | 'formatting' | 'chore';
+export type ChangeType =
+  'feature' | 'bugfix' | 'refactor' | 'test' | 'docs' | 'formatting' | 'chore';

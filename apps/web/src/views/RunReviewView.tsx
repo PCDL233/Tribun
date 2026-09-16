@@ -8,14 +8,19 @@ import { describeError } from '../parse-response';
 import { cancelReview, startReview } from '../api';
 import { CardHeading, PageHeader } from '../components/PageHeader';
 
-type RunFormValues = { repoPath: string; mode: 'fast' | 'full'; blockOn: 'BLOCKER' | 'WARNING' | 'NIT' };
+type RunFormValues = {
+  repoPath: string;
+  mode: 'fast' | 'full';
+  blockOn: 'BLOCKER' | 'WARNING' | 'NIT';
+};
 export type RunReviewViewProps = { onCompleted: (reviewId: string) => void };
 
 export function RunReviewView(props: RunReviewViewProps): ReactElement {
   const [runningId, setRunningId] = useState<string | undefined>(undefined);
   const queryClient = useQueryClient();
   const startMutation = useMutation({
-    mutationFn: (values: RunFormValues) => startReview(values.repoPath, values.mode, values.blockOn),
+    mutationFn: (values: RunFormValues) =>
+      startReview(values.repoPath, values.mode, values.blockOn),
     onSuccess: setRunningId,
   });
   const cancelMutation = useMutation({
@@ -28,41 +33,147 @@ export function RunReviewView(props: RunReviewViewProps): ReactElement {
     }
   };
   const progress = useReviewEvents(runningId, handleFinish);
-  const progressStatus = progress.cancelled ? '已取消' : progress.failed ? '失败' : progress.finished ? '已完成' : '进行中';
+  const progressStatus = progress.cancelled
+    ? '已取消'
+    : progress.failed
+      ? '失败'
+      : progress.finished
+        ? '已完成'
+        : '进行中';
 
   return (
     <div className="page-stack">
-      <PageHeader eyebrow="Review workspace" title="发起一次代码审查" description="选择仓库、审查模式和阻断阈值，实时跟踪分析进度并在完成后查看报告。" />
+      <PageHeader
+        eyebrow="Review workspace"
+        title="发起一次代码审查"
+        description="选择仓库、审查模式和阻断阈值，实时跟踪分析进度并在完成后查看报告。"
+      />
       <Card className="surface-card inline-form-card" title={<CardHeading title="审查配置" />}>
-        <Form<RunFormValues> className="review-form" layout="vertical" initialValues={{ mode: 'fast', blockOn: 'BLOCKER' }} onFinish={(values) => startMutation.mutate(values)}>
-          <Form.Item label="仓库路径" name="repoPath" rules={[{ required: true, message: '请输入仓库路径' }]}>
+        <Form<RunFormValues>
+          className="review-form"
+          layout="vertical"
+          initialValues={{ mode: 'fast', blockOn: 'BLOCKER' }}
+          onFinish={(values) => startMutation.mutate(values)}
+        >
+          <Form.Item
+            label="仓库路径"
+            name="repoPath"
+            rules={[{ required: true, message: '请输入仓库路径' }]}
+          >
             <Input placeholder="例如：D:/Code/your-project" />
           </Form.Item>
           <Form.Item label="审查模式" name="mode">
-            <Select options={[{ value: 'fast', label: 'Fast · 快速反馈' }, { value: 'full', label: 'Full · 完整分析' }]} />
+            <Select
+              options={[
+                { value: 'fast', label: 'Fast · 快速反馈' },
+                { value: 'full', label: 'Full · 完整分析' },
+              ]}
+            />
           </Form.Item>
           <Form.Item label="阻断阈值" name="blockOn" extra="达到该级别时，审查结果将标记为阻断。">
-            <Select options={[{ value: 'BLOCKER', label: 'BLOCKER · 严重问题' }, { value: 'WARNING', label: 'WARNING · 警告及以上' }, { value: 'NIT', label: 'NIT · 全部问题' }]} />
+            <Select
+              options={[
+                { value: 'BLOCKER', label: 'BLOCKER · 严重问题' },
+                { value: 'WARNING', label: 'WARNING · 警告及以上' },
+                { value: 'NIT', label: 'NIT · 全部问题' },
+              ]}
+            />
           </Form.Item>
-          <Form.Item label=" " colon={false}><Button type="primary" htmlType="submit" loading={startMutation.isPending}>开始审查</Button></Form.Item>
+          <Form.Item label=" " colon={false}>
+            <Button type="primary" htmlType="submit" loading={startMutation.isPending}>
+              开始审查
+            </Button>
+          </Form.Item>
         </Form>
       </Card>
-      {startMutation.isError ? <Alert type="error" showIcon message="发起失败" description={describeError(startMutation.error)} /> : null}
+      {startMutation.isError ? (
+        <Alert
+          type="error"
+          showIcon
+          message="发起失败"
+          description={describeError(startMutation.error)}
+        />
+      ) : null}
       {runningId !== undefined ? (
-        <Card className="surface-card" title={<CardHeading title="实时进度" />} extra={<Tag color={progress.failed ? 'error' : progress.cancelled ? 'default' : progress.finished ? 'success' : 'processing'}>{progressStatus}</Tag>}>
+        <Card
+          className="surface-card"
+          title={<CardHeading title="实时进度" />}
+          extra={
+            <Tag
+              color={
+                progress.failed
+                  ? 'error'
+                  : progress.cancelled
+                    ? 'default'
+                    : progress.finished
+                      ? 'success'
+                      : 'processing'
+              }
+            >
+              {progressStatus}
+            </Tag>
+          }
+        >
           <div className="progress-panel">
-            <div className="progress-id"><span className="progress-id-label">当前审查任务</span><Typography.Text copyable className="progress-id-value">{runningId}</Typography.Text></div>
-            <Steps responsive items={STAGE_GROUPS.map((group, index) => ({ title: group.label, status: progress.finished && !progress.failed && !progress.cancelled ? 'finish' : (progress.failed || progress.cancelled) && index === progress.step ? 'error' : index < progress.step ? 'finish' : index === progress.step ? 'process' : 'wait' }))} />
-            {!progress.finished ? <Button danger loading={cancelMutation.isPending} onClick={() => cancelMutation.mutate()}>取消审查</Button> : null}
-            {cancelMutation.isError ? <Alert style={{ marginTop: 16 }} type="error" showIcon message="取消请求失败" description={describeError(cancelMutation.error)} /> : null}
-            {progress.failed || progress.cancelled ? <Alert style={{ marginTop: 24 }} type={progress.cancelled ? 'warning' : 'error'} showIcon message={progress.cancelled ? '审查已取消' : '审查失败'} description={progress.message} /> : null}
-            {progress.result !== undefined ? <CompletedResultAlert result={progress.result} /> : null}
+            <div className="progress-id">
+              <span className="progress-id-label">当前审查任务</span>
+              <Typography.Text copyable className="progress-id-value">
+                {runningId}
+              </Typography.Text>
+            </div>
+            <Steps
+              responsive
+              items={STAGE_GROUPS.map((group, index) => ({
+                title: group.label,
+                status:
+                  progress.finished && !progress.failed && !progress.cancelled
+                    ? 'finish'
+                    : (progress.failed || progress.cancelled) && index === progress.step
+                      ? 'error'
+                      : index < progress.step
+                        ? 'finish'
+                        : index === progress.step
+                          ? 'process'
+                          : 'wait',
+              }))}
+            />
+            {!progress.finished ? (
+              <Button
+                danger
+                loading={cancelMutation.isPending}
+                onClick={() => cancelMutation.mutate()}
+              >
+                取消审查
+              </Button>
+            ) : null}
+            {cancelMutation.isError ? (
+              <Alert
+                style={{ marginTop: 16 }}
+                type="error"
+                showIcon
+                message="取消请求失败"
+                description={describeError(cancelMutation.error)}
+              />
+            ) : null}
+            {progress.failed || progress.cancelled ? (
+              <Alert
+                style={{ marginTop: 24 }}
+                type={progress.cancelled ? 'warning' : 'error'}
+                showIcon
+                message={progress.cancelled ? '审查已取消' : '审查失败'}
+                description={progress.message}
+              />
+            ) : null}
+            {progress.result !== undefined ? (
+              <CompletedResultAlert result={progress.result} />
+            ) : null}
           </div>
         </Card>
       ) : (
-        <Card className="surface-card onboarding-card">
-          <Typography.Title level={4} style={{ marginTop: 0 }}>从变更到结论</Typography.Title>
-          <Typography.Paragraph type="secondary" style={{ maxWidth: 680, marginBottom: 0 }}>ReviewFlow 会先解析 Diff，再按正确性、安全性、性能与静态规则并行检查，最后统一校验并生成可导出的报告。</Typography.Paragraph>
+        <Card className="surface-card empty-state-card">
+          <Typography.Text className="empty-state-copy">
+            填写上方配置并点击「开始审查」即可发起新一轮代码审查。
+          </Typography.Text>
         </Card>
       )}
     </div>
@@ -71,5 +182,21 @@ export function RunReviewView(props: RunReviewViewProps): ReactElement {
 
 function CompletedResultAlert(props: { result: CompletedResult }): ReactElement {
   const result = props.result;
-  return <Alert style={{ marginTop: 24 }} type={result.blocking ? 'error' : 'success'} showIcon message={result.blocking ? `审查完成：达到阻断阈值（BLOCKER × ${result.blockerCount}）` : '审查完成：未达阻断阈值'} description={<Space>风险评分 <Tag color={result.blocking ? 'error' : 'success'}>{result.riskScore}/100</Tag></Space>} />;
+  return (
+    <Alert
+      style={{ marginTop: 24 }}
+      type={result.blocking ? 'error' : 'success'}
+      showIcon
+      message={
+        result.blocking
+          ? `审查完成：达到阻断阈值（BLOCKER × ${result.blockerCount}）`
+          : '审查完成：未达阻断阈值'
+      }
+      description={
+        <Space>
+          风险评分 <Tag color={result.blocking ? 'error' : 'success'}>{result.riskScore}/100</Tag>
+        </Space>
+      }
+    />
+  );
 }

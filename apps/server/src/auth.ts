@@ -73,11 +73,49 @@ export function createRequireAuth(deps: AuthDeps): MiddlewareHandler<AppEnv> {
 /** requireAdmin 中间件：必须挂在 requireAuth 之后（依赖 Context 中的 user 变量） */
 export const requireAdmin = createMiddleware<AppEnv>(async (c, next) => {
   const user = c.get('user');
-  if (user?.role !== 'admin') {
+  // 管理员判定：拥有 '*' 权限或 role 字段为 admin（assignRoles 会依据角色自动派生 role）
+  if (user.permissions.includes('*') === false && user.role !== 'admin') {
     return c.json({ error: 'admin privilege required' }, 403);
   }
   await next();
 });
+
+/**
+ * requirePermission(permission) 中间件：必须挂在 requireAuth 之后。
+ * 按页面权限校验：拥有 '*' 权限、admin 角色、或精确命中 permission 时放行。
+ * 用于为被授予部分管理页权限的普通用户开放对应接口。
+ */
+export function requirePermission(permission: string): MiddlewareHandler<AppEnv> {
+  return createMiddleware<AppEnv>(async (c, next) => {
+    const user = c.get('user');
+    const allowed =
+      user.permissions.includes('*') ||
+      user.role === 'admin' ||
+      user.permissions.includes(permission);
+    if (!allowed) {
+      return c.json({ error: `permission required: ${permission}` }, 403);
+    }
+    await next();
+  });
+}
+
+/**
+ * requireAnyPermission(...permissions)：命中任一权限即放行（`*`/admin 角色始终放行）。
+ * 用于同一接口服务多个页面权限的场景，如配置接口同时服务 /admin/config 与 /admin/ai。
+ */
+export function requireAnyPermission(...permissions: string[]): MiddlewareHandler<AppEnv> {
+  return createMiddleware<AppEnv>(async (c, next) => {
+    const user = c.get('user');
+    const allowed =
+      user.permissions.includes('*') ||
+      user.role === 'admin' ||
+      permissions.some((p) => user.permissions.includes(p));
+    if (!allowed) {
+      return c.json({ error: 'permission required' }, 403);
+    }
+    await next();
+  });
+}
 
 function issueSessionCookie(deps: AuthDeps, c: Context, userId: string): void {
   const token = deps.users.createSession(userId, new Date(Date.now() + SESSION_TTL_MS));

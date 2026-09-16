@@ -1,7 +1,6 @@
 import { Outlet, useLocation, useNavigate } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
 import {
-  AppstoreOutlined,
   BarChartOutlined,
   DashboardOutlined,
   DownOutlined,
@@ -14,7 +13,9 @@ import {
 import { Button, Dropdown, Layout, Menu, Typography } from 'antd';
 import type { ItemType } from 'antd/es/menu/interface';
 import { useAuth, useLogout } from '../hooks/use-auth';
-import { BrandMark, initials } from '../components/Brand';
+import { BrandMark } from '../components/Brand';
+import { UserAvatar } from '../components/UserAvatar';
+import { canAccessPath, hasAdminAccess } from '../permissions';
 import { useTheme } from '../theme-context';
 
 type NavItem = { key: string; label: string; icon: ReactElement };
@@ -49,11 +50,12 @@ export function UserLayout(): ReactElement {
   const { mode, toggle } = useTheme();
 
   const menuItems: ItemType[] = [
-    ...navItems.map((item) => ({ key: item.key, label: item.label, icon: item.icon })),
-    ...(user?.role === 'admin'
-      ? [{ key: '/admin', label: '管理后台', icon: <AppstoreOutlined /> }]
+    ...navItems
+      .filter((item) => canAccessPath(user?.permissions ?? [], item.key))
+      .map((item) => ({ key: item.key, label: item.label, icon: item.icon })),
+    ...(canAccessPath(user?.permissions ?? [], '/profile')
+      ? [{ key: '/profile', label: '个人设置', icon: <SettingOutlined /> }]
       : []),
-    { key: '/profile', label: '个人设置', icon: <SettingOutlined /> },
   ];
 
   const handleLogout = async (): Promise<void> => {
@@ -63,7 +65,13 @@ export function UserLayout(): ReactElement {
 
   return (
     <Layout className="app-shell">
-      <Layout.Sider className="app-sider" width={232} breakpoint="lg" collapsedWidth={0} theme="dark">
+      <Layout.Sider
+        className="app-sider"
+        width={232}
+        breakpoint="lg"
+        collapsedWidth={0}
+        theme="light"
+      >
         <div className="app-brand">
           <BrandMark />
           <div>
@@ -74,7 +82,7 @@ export function UserLayout(): ReactElement {
         <div className="app-menu-label">工作空间</div>
         <Menu
           className="app-menu"
-          theme="dark"
+          theme="light"
           mode="inline"
           items={menuItems}
           selectedKeys={[currentKey(location.pathname)]}
@@ -82,7 +90,7 @@ export function UserLayout(): ReactElement {
         />
         <div className="app-sidebar-footer">
           <div className="sidebar-user">
-            <span className="sidebar-user-avatar">{initials(user?.username)}</span>
+            <UserAvatar user={user} className="sidebar-user-avatar" />
             <div style={{ minWidth: 0 }}>
               <div className="sidebar-user-name">{user?.username ?? '当前用户'}</div>
               <div className="sidebar-user-role">{user?.role === 'admin' ? '管理员' : '成员'}</div>
@@ -109,14 +117,27 @@ export function UserLayout(): ReactElement {
               trigger={['click']}
               menu={{
                 items: [
-                  { key: 'profile', label: '个人设置', onClick: () => void navigate({ to: '/profile' }) },
+                  {
+                    key: 'profile',
+                    label: '个人设置',
+                    onClick: () => void navigate({ to: '/profile' }),
+                  },
+                  ...(user !== null && hasAdminAccess(user.permissions, user.role)
+                    ? [
+                        {
+                          key: 'admin',
+                          label: '管理后台',
+                          onClick: () => void navigate({ to: '/admin' }),
+                        },
+                      ]
+                    : []),
                   { type: 'divider' },
                   { key: 'logout', label: '退出登录', onClick: () => void handleLogout() },
                 ],
               }}
             >
               <Button className="app-user-trigger" type="text">
-                <span className="app-user-avatar">{initials(user?.username)}</span>
+                <UserAvatar user={user} className="app-user-avatar" />
                 <span className="app-user-name">{user?.username ?? '当前用户'}</span>
                 <DownOutlined className="app-user-chevron" />
               </Button>

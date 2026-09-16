@@ -23,24 +23,34 @@ function AppRoot(): ReactElement {
       theme={{
         algorithm: isDark ? antdTheme.darkAlgorithm : antdTheme.defaultAlgorithm,
         token: {
-          colorPrimary: '#1677ff',
-          colorInfo: '#1677ff',
-          colorLink: '#1677ff',
-          colorText: isDark ? '#f0f0f0' : '#1f1f1f',
-          colorTextSecondary: isDark ? '#a6a6a6' : '#595959',
-          colorBorder: isDark ? '#434343' : '#d9d9d9',
-          borderRadius: 6,
+          colorPrimary: isDark ? '#818cf8' : '#4f46e5',
+          colorInfo: isDark ? '#818cf8' : '#4f46e5',
+          colorLink: isDark ? '#818cf8' : '#4f46e5',
+          colorText: isDark ? '#f1f5f9' : '#0f172a',
+          colorTextSecondary: isDark ? '#94a3b8' : '#64748b',
+          colorBorder: isDark ? '#334155' : '#e2e8f0',
+          colorBgContainer: isDark ? '#1e293b' : '#ffffff',
+          borderRadius: 8,
+          borderRadiusLG: 12,
           controlHeight: 36,
-          fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
+          fontFamily:
+            '-apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif',
         },
         components: {
-          Button: { borderRadius: 6, fontWeight: 500 },
-          Card: { borderRadiusLG: 8 },
+          Button: { borderRadius: 8, fontWeight: 500 },
+          Card: { borderRadiusLG: 12, borderRadius: 12 },
           Table: {
-            headerBg: isDark ? '#1f1f1f' : '#fafafa',
-            headerColor: isDark ? '#d9d9d9' : '#595959',
-            rowHoverBg: isDark ? '#262626' : '#f5faff',
+            headerBg: isDark ? '#1e293b' : '#f8fafc',
+            headerColor: isDark ? '#e2e8f0' : '#475569',
+            rowHoverBg: isDark ? '#334155' : '#f1f5f9',
           },
+          Menu: {
+            itemSelectedBg: isDark ? '#312e81' : '#eef2ff',
+            itemSelectedColor: isDark ? '#818cf8' : '#4f46e5',
+            itemHoverBg: isDark ? '#334155' : '#f1f5f9',
+          },
+          Input: { borderRadius: 8 },
+          Select: { borderRadius: 8 },
         },
       }}
     >

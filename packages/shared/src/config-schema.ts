@@ -10,6 +10,7 @@ export const AiReviewConfigSchema = z.object({
       provider: z.enum(['anthropic', 'openai', 'ollama', 'mock']).default('anthropic'),
       model: z.string().default('claude-sonnet-4.5'),
       apiKey: z.string().default('${AI_REVIEW_API_KEY}'),
+      baseUrl: z.string().optional(),
       maxTokensPerReview: z.number().int().positive().max(200_000).default(50_000),
       temperature: z.number().min(0).max(2).default(0.1),
       mockFixturesDir: z.string().default('.ai-review-cache/llm-fixtures'),

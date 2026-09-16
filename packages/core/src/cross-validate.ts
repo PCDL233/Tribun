@@ -16,17 +16,17 @@ function overlaps(a: Finding, b: Finding): boolean {
  * 阶段 1：严重度重分类（方案 3.6）。
  * 测试/文档文件中的高危发现降级为 NIT——例如测试文件中的硬编码值。
  */
-export function reclassifySeverity(
-  findings: readonly Finding[],
-  context: CodeContext,
-): Finding[] {
+export function reclassifySeverity(findings: readonly Finding[], context: CodeContext): Finding[] {
   const lowStakesPaths = new Set(
     context.files
       .filter((file) => file.changeType === 'test' || file.changeType === 'docs')
       .map((file) => file.diff.path),
   );
   return findings.map((finding) => {
-    if (!lowStakesPaths.has(finding.filePath) || SEVERITY_RANK[finding.severity] <= SEVERITY_RANK.NIT) {
+    if (
+      !lowStakesPaths.has(finding.filePath) ||
+      SEVERITY_RANK[finding.severity] <= SEVERITY_RANK.NIT
+    ) {
       return finding;
     }
     return {
@@ -104,7 +104,5 @@ export function sortFindings(findings: readonly Finding[]): Finding[] {
  * ESLint 规则元数据，在后续里程碑接入；接入后插入本组合序列。
  */
 export function crossValidate(findings: readonly Finding[], context: CodeContext): Finding[] {
-  return sortFindings(
-    dedupeFindings(scoreConfidence(reclassifySeverity(findings, context))),
-  );
+  return sortFindings(dedupeFindings(scoreConfidence(reclassifySeverity(findings, context))));
 }

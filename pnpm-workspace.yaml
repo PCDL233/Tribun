@@ -63,5 +63,5 @@ catalog:
 
 onlyBuiltDependencies:
   - turbo
-  # better-sqlite3 是原生模块，pnpm 10 默认拒绝其 postinstall 编译脚本
-  - better-sqlite3
+  # better-sqlite3@13 自带预编译二进制（prebuilds/），无需 node-gyp 编译；
+  # 从 onlyBuiltDependencies 移除后 pnpm 10 不会触发 node-gyp rebuild，直接使用预编译产物

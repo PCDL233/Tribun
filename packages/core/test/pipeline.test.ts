@@ -133,7 +133,11 @@ describe('runReviewPipeline', () => {
     };
     const deps = makeDeps({
       diff: DEEP_DIFF,
-      providers: { correctness: lowConfidence, security: lowConfidence, performance: lowConfidence },
+      providers: {
+        correctness: lowConfidence,
+        security: lowConfidence,
+        performance: lowConfidence,
+      },
     });
     const seenNodes: string[] = [];
     const state = await runReviewPipeline(deps, {
@@ -160,9 +164,15 @@ describe('runReviewPipeline', () => {
   it('reviews quick files only in full mode', async () => {
     const calls = { count: 0 };
     const marker = llmMarkerProvider(calls);
-    const fastState = await runReviewPipeline(makeDeps({ diff: QUICK_DIFF, providers: { correctness: marker, security: marker, performance: marker } }), {
-      reviewId: 'test-fast',
-    });
+    const fastState = await runReviewPipeline(
+      makeDeps({
+        diff: QUICK_DIFF,
+        providers: { correctness: marker, security: marker, performance: marker },
+      }),
+      {
+        reviewId: 'test-fast',
+      },
+    );
     expect(fastState.metrics.filesQuick).toBe(1);
     expect(fastState.findings).toEqual([]);
 

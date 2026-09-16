@@ -34,7 +34,7 @@ export function LoginPage(props: LoginPageProps): ReactElement {
           <BrandMark />
           <div>
             <div className="auth-brand-title">ReviewFlow</div>
-            <div className="app-brand-subtitle">AI CODE REVIEW</div>
+            <div className="app-brand-subtitle">CODE REVIEW CONSOLE</div>
           </div>
         </div>
         <div className="auth-visual-copy">
@@ -82,13 +82,13 @@ export function LoginPage(props: LoginPageProps): ReactElement {
               <Input.Password placeholder="输入登录密码" autoComplete="current-password" />
             </Form.Item>
             <Button type="primary" htmlType="submit" block loading={loginMutation.isPending}>
-              登录工作区
+              登录
             </Button>
           </Form>
           <Typography.Paragraph className="auth-footnote">
             还没有账号？{' '}
             <Typography.Link onClick={() => void navigate({ to: '/register' })}>
-              创建一个
+              去注册
             </Typography.Link>
           </Typography.Paragraph>
         </Card>

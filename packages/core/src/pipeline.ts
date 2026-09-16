@@ -1,6 +1,16 @@
 import { END, MemorySaver, START, StateGraph } from '@langchain/langgraph';
 import type { CompiledStateGraph, StateDefinition } from '@langchain/langgraph';
-import { HEAL_CONFIDENCE_THRESHOLD, MAX_HEAL_ROUNDS, makeHealNode, makeParseNode, makePlanNode, makeReportNode, makeReviewNode, makeStaticReviewNode, makeValidateNode } from './nodes.js';
+import {
+  HEAL_CONFIDENCE_THRESHOLD,
+  MAX_HEAL_ROUNDS,
+  makeHealNode,
+  makeParseNode,
+  makePlanNode,
+  makeReportNode,
+  makeReviewNode,
+  makeStaticReviewNode,
+  makeValidateNode,
+} from './nodes.js';
 import type { PipelineDeps } from './nodes.js';
 import { reviewStateAnnotation } from './state.js';
 import type { ReviewState } from './state.js';
@@ -53,29 +63,31 @@ export function routeAfterValidate(state: ReviewState): 'heal' | 'report' {
  * @returns 编译后的图（可 invoke / stream）
  */
 export function buildPipeline(deps: PipelineDeps): CompiledReviewPipeline {
-  return new StateGraph(reviewStateAnnotation)
-    .addNode('parse', makeParseNode(deps))
-    .addNode('riskPlan', makePlanNode(deps))
-    .addNode('correctness', makeReviewNode('correctness', deps))
-    .addNode('security', makeReviewNode('security', deps))
-    .addNode('performance', makeReviewNode('performance', deps))
-    .addNode('static', makeStaticReviewNode(deps))
-    .addNode('validate', makeValidateNode())
-    .addNode('heal', makeHealNode(deps))
-    .addNode('report', makeReportNode(Date.now()))
-    .addEdge(START, 'parse')
-    .addEdge('parse', 'riskPlan')
-    // fan-out：同一节点的多条出边即并行分支（LangGraph superstep 模型）
-    .addEdge('riskPlan', 'correctness')
-    .addEdge('riskPlan', 'security')
-    .addEdge('riskPlan', 'performance')
-    .addEdge('riskPlan', 'static')
-    // fan-in：源数组表示汇聚点等待全部分支完成
-    .addEdge(['correctness', 'security', 'performance', 'static'] as const, 'validate')
-    .addConditionalEdges('validate', routeAfterValidate)
-    .addEdge('heal', 'validate')
-    .addEdge('report', END)
-    .compile({ checkpointer: new MemorySaver() });
+  return (
+    new StateGraph(reviewStateAnnotation)
+      .addNode('parse', makeParseNode(deps))
+      .addNode('riskPlan', makePlanNode(deps))
+      .addNode('correctness', makeReviewNode('correctness', deps))
+      .addNode('security', makeReviewNode('security', deps))
+      .addNode('performance', makeReviewNode('performance', deps))
+      .addNode('static', makeStaticReviewNode(deps))
+      .addNode('validate', makeValidateNode())
+      .addNode('heal', makeHealNode(deps))
+      .addNode('report', makeReportNode(Date.now()))
+      .addEdge(START, 'parse')
+      .addEdge('parse', 'riskPlan')
+      // fan-out：同一节点的多条出边即并行分支（LangGraph superstep 模型）
+      .addEdge('riskPlan', 'correctness')
+      .addEdge('riskPlan', 'security')
+      .addEdge('riskPlan', 'performance')
+      .addEdge('riskPlan', 'static')
+      // fan-in：源数组表示汇聚点等待全部分支完成
+      .addEdge(['correctness', 'security', 'performance', 'static'] as const, 'validate')
+      .addConditionalEdges('validate', routeAfterValidate)
+      .addEdge('heal', 'validate')
+      .addEdge('report', END)
+      .compile({ checkpointer: new MemorySaver() })
+  );
 }
 
 export type RunPipelineOptions = {
@@ -87,9 +99,19 @@ export type RunPipelineOptions = {
 };
 
 function isNamedNodeUpdate(entry: [string, unknown]): entry is [PipelineNodeName, unknown] {
-  return (['parse', 'riskPlan', 'correctness', 'security', 'performance', 'static', 'validate', 'heal', 'report'] as const).includes(
-    entry[0] as PipelineNodeName,
-  );
+  return (
+    [
+      'parse',
+      'riskPlan',
+      'correctness',
+      'security',
+      'performance',
+      'static',
+      'validate',
+      'heal',
+      'report',
+    ] as const
+  ).includes(entry[0] as PipelineNodeName);
 }
 
 function isStateSnapshot(value: unknown): value is ReviewState {
@@ -132,7 +154,12 @@ export async function runReviewPipeline(
         finalState = payload;
         continue;
       }
-      if (mode === 'updates' && options.onNodeUpdate !== undefined && payload !== null && typeof payload === 'object') {
+      if (
+        mode === 'updates' &&
+        options.onNodeUpdate !== undefined &&
+        payload !== null &&
+        typeof payload === 'object'
+      ) {
         for (const entry of Object.entries(payload)) {
           if (isNamedNodeUpdate(entry)) options.onNodeUpdate(entry[0], entry[1]);
         }

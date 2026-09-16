@@ -6,14 +6,20 @@ import type { PipelineDeps } from '@ai-review/core';
 import { GitReader, createFileHistory, createGitRunner, createIgnoreRules } from '@ai-review/diff';
 import { KnowledgeBase } from '@ai-review/rag';
 import { TokenBudget, createConfiguredProviders } from '@ai-review/llm';
-import { deriveQualityNotes, deriveSuggestions, renderJson, renderMarkdown } from '@ai-review/report';
+import {
+  deriveQualityNotes,
+  deriveSuggestions,
+  renderJson,
+  renderMarkdown,
+} from '@ai-review/report';
 import { EXIT_CODES, severityMeetsThreshold } from '@ai-review/shared';
 import { AiReviewConfigSchema, loadConfig } from '@ai-review/shared';
 import type { ExitCode, RagRetriever, ReviewReport, Severity } from '@ai-review/shared';
 import { buildDefaultRegistry } from '@ai-review/tools';
 
-
-async function loadRagRetriever(config: ReturnType<typeof AiReviewConfigSchema.parse>): Promise<RagRetriever> {
+async function loadRagRetriever(
+  config: ReturnType<typeof AiReviewConfigSchema.parse>,
+): Promise<RagRetriever> {
   const empty: RagRetriever = { query: async () => [] };
   if (!config.rag.enabled || !existsSync(config.rag.indexDir)) return empty;
 
@@ -68,11 +74,14 @@ export async function runReview(options: RunReviewOptions): Promise<ExitCode> {
     ignores: createIgnoreRules(config.review.ignorePatterns),
     history: createFileHistory(git),
     providers: createConfiguredProviders(config),
-    registry: buildDefaultRegistry({ complexityThreshold: config.staticAnalysis.complexityThreshold }),
+    registry: buildDefaultRegistry({
+      complexityThreshold: config.staticAnalysis.complexityThreshold,
+    }),
     enabledTools: config.staticAnalysis.enabledTools,
     ragTopK: config.rag.topK,
     budget: new TokenBudget(config.llm.maxTokensPerReview),
-    modelName: config.llm.provider === 'mock' ? 'mock + 静态分析' : `${config.llm.model} + 静态分析`,
+    modelName:
+      config.llm.provider === 'mock' ? 'mock + 静态分析' : `${config.llm.model} + 静态分析`,
     mode,
   };
 

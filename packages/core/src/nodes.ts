@@ -4,7 +4,15 @@ import { DiffContextBuilder } from '@ai-review/diff';
 import type { GitReader } from '@ai-review/diff';
 import type { ReviewProvider, TokenBudget } from '@ai-review/llm';
 import type { ToolRegistry } from '@ai-review/tools';
-import type { CodeContext, Finding, FileContext, FileHistory, IgnoreRules, RagRetriever, ReviewPlan } from '@ai-review/shared';
+import type {
+  CodeContext,
+  Finding,
+  FileContext,
+  FileHistory,
+  IgnoreRules,
+  RagRetriever,
+  ReviewPlan,
+} from '@ai-review/shared';
 import type { RunnableConfig } from '@langchain/core/runnables';
 import { crossValidate } from './cross-validate.js';
 import { RiskPlanner } from './risk-planner.js';
@@ -60,7 +68,10 @@ export type PipelineDeps = {
   modelName?: string | undefined;
 };
 
-export type PipelineNode = (state: ReviewState, config: RunnableConfig) => Promise<Partial<ReviewState>>;
+export type PipelineNode = (
+  state: ReviewState,
+  config: RunnableConfig,
+) => Promise<Partial<ReviewState>>;
 
 /** 预留估算：约 4 字符/token，加固定的指令与输出余量 */
 function estimateTokens(diff: FileContext['diff']): number {
@@ -88,12 +99,20 @@ function selectFiles(context: CodeContext, paths: ReadonlySet<string>): CodeCont
 
 /** 读取 diff（暂存区或 base...HEAD 区间）并构建上下文包（方案 3.1） */
 export function makeParseNode(deps: PipelineDeps): PipelineNode {
-  const builder = new DiffContextBuilder(deps.gitReader, deps.rag, deps.ignores, 50, deps.base, deps.ragTopK);
+  const builder = new DiffContextBuilder(
+    deps.gitReader,
+    deps.rag,
+    deps.ignores,
+    50,
+    deps.base,
+    deps.ragTopK,
+  );
   return async (state) => {
     void state;
-    const rawDiff = deps.base === undefined
-      ? await deps.gitReader.readStagedDiff()
-      : await deps.gitReader.readRangeDiff(deps.base);
+    const rawDiff =
+      deps.base === undefined
+        ? await deps.gitReader.readStagedDiff()
+        : await deps.gitReader.readRangeDiff(deps.base);
     return { context: await builder.build(), rawDiff };
   };
 }
@@ -102,7 +121,10 @@ export function makeParseNode(deps: PipelineDeps): PipelineNode {
  * 预算降级（方案 3.3）：按风险分降序逐文件预留，余额不足的文件移入 staticOnly。
  * 在 plan 节点单点执行（而非并行审查节点内），避免并行分支对共享预算的竞争写入。
  */
-function applyBudget(plan: ReviewPlan, budget: TokenBudget | undefined): {
+function applyBudget(
+  plan: ReviewPlan,
+  budget: TokenBudget | undefined,
+): {
   plan: ReviewPlan;
   degraded: string[];
 } {

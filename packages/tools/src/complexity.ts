@@ -84,20 +84,17 @@ const STATIC_CONFIDENCE = 0.9;
  */
 export function complexityFindings(files: readonly FileContext[], threshold = 15): Finding[] {
   return files.flatMap((file) =>
-    analyzeComplexity(file.stagedContent, threshold).map(
-      (metrics): Finding => ({
-        agent: 'static',
-        severity: 'WARNING',
-        confidence: STATIC_CONFIDENCE,
-        filePath: file.diff.path,
-        lineStart: metrics.line,
-        lineEnd: metrics.endLine,
-        title: `Function "${metrics.name}" has cyclomatic complexity ${metrics.complexity}`,
-        description: `Cyclomatic complexity ${metrics.complexity} exceeds the configured threshold ${threshold}. High-complexity functions are hard to test and review.`,
-        suggestion:
-          'Extract guard clauses and split the function into smaller named helpers.',
-        isFalsePositive: false,
-      }),
-    ),
+    analyzeComplexity(file.stagedContent, threshold).map((metrics): Finding => ({
+      agent: 'static',
+      severity: 'WARNING',
+      confidence: STATIC_CONFIDENCE,
+      filePath: file.diff.path,
+      lineStart: metrics.line,
+      lineEnd: metrics.endLine,
+      title: `Function "${metrics.name}" has cyclomatic complexity ${metrics.complexity}`,
+      description: `Cyclomatic complexity ${metrics.complexity} exceeds the configured threshold ${threshold}. High-complexity functions are hard to test and review.`,
+      suggestion: 'Extract guard clauses and split the function into smaller named helpers.',
+      isFalsePositive: false,
+    })),
   );
 }

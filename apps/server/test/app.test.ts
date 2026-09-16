@@ -1,3 +1,6 @@
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runReviewPipeline } from '@ai-review/core';
 import type { GitRunner, PipelineDeps, PipelineRunner, ReviewState } from '@ai-review/core';
@@ -7,6 +10,7 @@ import { createMockProvider } from '@ai-review/llm';
 import { buildDefaultRegistry } from '@ai-review/tools';
 import type { Finding } from '@ai-review/shared';
 import { buildApp } from '../src/app.js';
+import { AvatarStore } from '../src/avatar.js';
 import { createStoreReviewCache } from '../src/cache.js';
 import { createReviewMetrics } from '../src/metrics.js';
 import { ReviewService } from '../src/review-service.js';
@@ -76,13 +80,19 @@ function makeGatedRunner(gate: { promise: Promise<void>; resolve: () => void }):
 
 type Harness = ReturnType<typeof buildApp>;
 
-function makeHarness(runner: PipelineRunner): Harness {
+function makeHarness(runner: PipelineRunner, avatars?: AvatarStore): Harness {
   const sqlite = openSqlite(':memory:');
   const store = new ReviewStore(sqlite);
   const users = new UserStore(sqlite);
   const metrics = createReviewMetrics();
   const service = new ReviewService(store, makeDeps, runner, metrics);
-  return buildApp({ store, users, service, metrics });
+  return buildApp({
+    store,
+    users,
+    service,
+    metrics,
+    ...(avatars === undefined ? {} : { avatars }),
+  });
 }
 
 const gates: Array<{ promise: Promise<void>; resolve: () => void }> = [];
@@ -220,6 +230,289 @@ describe('auth API', () => {
   });
 });
 
+describe('avatar upload API', () => {
+  // 1x1 PNG（真实魔数，非仅 Content-Type 伪造）
+  const PNG_1PX = new Uint8Array([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d, 0x49, 0x48, 0x44, 0x52,
+    0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53,
+    0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, 0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
+    0x00, 0x00, 0x03, 0x00, 0x01, 0x00, 0x00, 0x00, 0x00, 0x00, 0x8b, 0x29, 0x8d, 0x00, 0x00, 0x00,
+    0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+  ]);
+
+  function avatarHarness(): ReturnType<typeof buildApp> {
+    const avatars = new AvatarStore(mkdtempSync(join(tmpdir(), 'ai-review-avatar-')));
+    return makeHarness(async () => makeState(), avatars);
+  }
+
+  function multipart(file: Uint8Array, type: string): { body: FormData } {
+    const fd = new FormData();
+    fd.append('avatar', new Blob([file], { type }), 'avatar.png');
+    return { body: fd };
+  }
+
+  it('uploads a valid PNG and serves it back with image/png', async () => {
+    const app = avatarHarness();
+    const { cookie } = await registerUser(app, 'carol');
+    const upload = await app.request('/api/auth/avatar', {
+      method: 'POST',
+      headers: { ...auth(cookie) },
+      ...multipart(PNG_1PX, 'image/png'),
+    });
+    expect(upload.status).toBe(200);
+    const { user } = (await upload.json()) as { user: { avatarUrl: string | null; id: string } };
+    expect(user.avatarUrl).toContain('/api/users/');
+    expect(user.avatarUrl).toContain('/avatar');
+
+    const read = await app.request(user.avatarUrl, { headers: { ...auth(cookie) } });
+    expect(read.status).toBe(200);
+    expect(read.headers.get('content-type')).toBe('image/png');
+    expect(read.headers.get('cache-control')).toBe('no-store');
+    const served = new Uint8Array(await read.arrayBuffer());
+    expect(served.length).toBe(PNG_1PX.length);
+    expect(served).toEqual(PNG_1PX);
+  });
+
+  it('rejects non-image upload (SVG 魔数) with 400', async () => {
+    const app = avatarHarness();
+    const { cookie } = await registerUser(app, 'dave');
+    const svg = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg"></svg>');
+    const res = await app.request('/api/auth/avatar', {
+      method: 'POST',
+      headers: { ...auth(cookie) },
+      ...multipart(svg, 'image/svg+xml'),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it('rejects oversized upload with 413', async () => {
+    const app = avatarHarness();
+    const { cookie } = await registerUser(app, 'erin');
+    const big = new Uint8Array(2 * 1024 * 1024 + 1);
+    // 头部仍是合法 PNG 魔数，仅验证体积上限
+    big.set(PNG_1PX.subarray(0, 8), 0);
+    const res = await app.request('/api/auth/avatar', {
+      method: 'POST',
+      headers: { ...auth(cookie) },
+      ...multipart(big, 'image/png'),
+    });
+    expect(res.status).toBe(413);
+  });
+
+  it('requires authentication to upload and returns 404 for users without avatar', async () => {
+    const app = avatarHarness();
+    const { cookie } = await registerUser(app, 'frank');
+    expect((await app.request('/api/auth/avatar', { method: 'POST' })).status).toBe(401);
+    // 未上传头像时读取返回 404
+    const me = (await app.request('/api/auth/me', { headers: { ...auth(cookie) } })) as {
+      status: number;
+      json(): Promise<{ user: { id: string } }>;
+    };
+    const { user } = await me.json();
+    expect(
+      (await app.request(`/api/users/${user.id}/avatar`, { headers: { ...auth(cookie) } })).status,
+    ).toBe(404);
+  });
+});
+
+describe('admin user creation & RBAC roles', () => {
+  it('allows admin to create a regular user', async () => {
+    const app = makeHarness(async () => makeState());
+    const { cookie } = await registerUser(app, 'boss');
+    const res = await app.request('/api/admin/users', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ username: 'newbie', password: 'password123' }),
+    });
+    expect(res.status).toBe(201);
+    const { user } = (await res.json()) as { user: { role: string; username: string } };
+    expect(user.username).toBe('newbie');
+    expect(user.role).toBe('user');
+  });
+
+  it('seeds built-in admin/user roles', async () => {
+    const app = makeHarness(async () => makeState());
+    const { cookie } = await registerUser(app, 'boss');
+    const res = await app.request('/api/admin/roles', { headers: { ...auth(cookie) } });
+    expect(res.status).toBe(200);
+    const { roles } = (await res.json()) as {
+      roles: Array<{ name: string; isSystem: boolean; permissions: string[] }>;
+    };
+    const names = roles.map((r) => r.name);
+    expect(names).toContain('admin');
+    expect(names).toContain('user');
+    const adminRole = roles.find((r) => r.name === 'admin');
+    expect(adminRole?.permissions).toEqual(['*']);
+    expect(adminRole?.isSystem).toBe(true);
+  });
+
+  it('creates, assigns and deletes a custom role', async () => {
+    const app = makeHarness(async () => makeState());
+    const { cookie } = await registerUser(app, 'boss');
+    const createRes = await app.request('/api/admin/roles', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({
+        name: 'reviewer',
+        description: 'can review',
+        priority: 50,
+        permissions: ['/', '/run'],
+      }),
+    });
+    expect(createRes.status).toBe(201);
+    const { role } = (await createRes.json()) as {
+      role: { id: string; isSystem: boolean };
+    };
+    expect(role.isSystem).toBe(false);
+
+    // 管理员不能删除内置角色
+    const delSystem = await app.request('/api/admin/roles/role-admin', {
+      method: 'DELETE',
+      headers: { ...auth(cookie) },
+    });
+    expect(delSystem.status).toBe(400);
+
+    // 分配角色给新用户
+    const created = await app.request('/api/admin/users', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ username: 'junior', password: 'password123' }),
+    });
+    const { user } = (await created.json()) as { user: { id: string } };
+    const assign = await app.request(`/api/admin/users/${user.id}/roles`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ roleIds: [role.id, 'role-user'] }),
+    });
+    expect(assign.status).toBe(200);
+    const assigned = (await assign.json()) as {
+      user: { roleIds: string[]; permissions: string[] };
+    };
+    expect(assigned.user.roleIds).toContain(role.id);
+    expect(assigned.user.permissions).toContain('/run');
+
+    const delCustom = await app.request(`/api/admin/roles/${role.id}`, {
+      method: 'DELETE',
+      headers: { ...auth(cookie) },
+    });
+    expect(delCustom.status).toBe(200);
+  });
+
+  it('promotes/demotes admin purely via role assignment (role column derived)', async () => {
+    const app = makeHarness(async () => makeState());
+    const { cookie } = await registerUser(app, 'boss');
+    const created = await app.request('/api/admin/users', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ username: 'junior2', password: 'password123' }),
+    });
+    const { user } = (await created.json()) as { user: { id: string; role: string } };
+    expect(user.role).toBe('user');
+
+    // 分配内置 admin 角色（含 '*'）→ 自动升级为管理员
+    const promote = await app.request(`/api/admin/users/${user.id}/roles`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ roleIds: ['role-admin'] }),
+    });
+    expect(promote.status).toBe(200);
+    const promoted = (await promote.json()) as {
+      user: { role: string; permissions: string[] };
+    };
+    expect(promoted.user.role).toBe('admin');
+    expect(promoted.user.permissions).toEqual(['*']);
+
+    // 降回普通用户角色 → role 字段自动回到 user
+    const demote = await app.request(`/api/admin/users/${user.id}/roles`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ roleIds: ['role-user'] }),
+    });
+    const demoted = (await demote.json()) as { user: { role: string } };
+    expect(demoted.user.role).toBe('user');
+  });
+
+  it('backfills built-in roles for legacy accounts without any role assignment', () => {
+    const sqlite = openSqlite(':memory:');
+    new ReviewStore(sqlite); // 建表 + 种子角色
+    const users = new UserStore(sqlite);
+    const now = new Date().toISOString();
+    // 模拟 RBAC 引入前创建的存量账号：仅写 users 表，不分配任何角色
+    sqlite
+      .prepare(
+        `INSERT INTO users (id, username, password_hash, role, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run('legacy-admin', 'oldadmin', 'x', 'admin', 'active', now);
+    sqlite
+      .prepare(
+        `INSERT INTO users (id, username, password_hash, role, status, created_at)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+      )
+      .run('legacy-user', 'olduser', 'x', 'user', 'active', now);
+
+    // 迁移前：无任何角色 → permissions 为空（正是“管理员可访问页面过少”的根因）
+    expect(users.getById('legacy-admin')?.permissions).toEqual([]);
+    expect(users.getById('legacy-user')?.permissions).toEqual([]);
+
+    const count = users.backfillDefaultRoles();
+    expect(count).toBe(2);
+
+    // 迁移后：admin→role-admin（全权限），user→role-user（常规页面）
+    const admin = users.getById('legacy-admin');
+    expect(admin?.role).toBe('admin');
+    expect(admin?.permissions).toEqual(['*']);
+    const user = users.getById('legacy-user');
+    expect(user?.role).toBe('user');
+    expect(user?.permissions).toContain('/reviews');
+
+    // 幂等：再次调用不再补发
+    expect(users.backfillDefaultRoles()).toBe(0);
+  });
+
+  it('grants access only to admin pages a role was explicitly permitted', async () => {
+    const app = makeHarness(async () => makeState());
+    const { cookie } = await registerUser(app, 'boss');
+
+    // 建一个仅含用户管理权限的角色
+    const roleRes = await app.request('/api/admin/roles', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ name: 'usermgr', priority: 60, permissions: ['/', '/admin/users'] }),
+    });
+    const { role } = (await roleRes.json()) as { role: { id: string } };
+
+    const created = await app.request('/api/admin/users', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ username: 'staff', password: 'password123' }),
+    });
+    const { user } = (await created.json()) as { user: { id: string } };
+    await app.request(`/api/admin/users/${user.id}/roles`, {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ roleIds: [role.id] }),
+    });
+
+    // 以该用户登录，验证按页面权限放行/拒绝
+    const login = await app.request('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'staff', password: 'password123' }),
+    });
+    expect(login.status).toBe(200);
+    const staffCookie = (login.headers.get('set-cookie') ?? '').split(';')[0] ?? '';
+
+    expect((await app.request('/api/admin/users', { headers: auth(staffCookie) })).status).toBe(
+      200,
+    );
+    expect((await app.request('/api/admin/roles', { headers: auth(staffCookie) })).status).toBe(
+      403,
+    );
+    expect((await app.request('/metrics', { headers: auth(staffCookie) })).status).toBe(403);
+  });
+});
+
 describe('review REST API', () => {
   it('runs a review to completion and serves its report', async () => {
     const app = makeHarness(async () => makeState());
@@ -278,26 +571,37 @@ describe('per-user data isolation', () => {
     const bobReview = await startReview(app, bob.cookie);
 
     // alice 看不到 bob 的报告详情 / 列表 / 统计
-    expect((await app.request(`/api/reviews/${bobReview}`, { headers: auth(alice.cookie) })).status).toBe(404);
-    const aliceList = (await (await app.request('/api/reviews', { headers: auth(alice.cookie) })).json()) as {
+    expect(
+      (await app.request(`/api/reviews/${bobReview}`, { headers: auth(alice.cookie) })).status,
+    ).toBe(404);
+    const aliceList = (await (
+      await app.request('/api/reviews', { headers: auth(alice.cookie) })
+    ).json()) as {
       reviews: Array<{ reviewId: string }>;
     };
     expect(aliceList.reviews.map((r) => r.reviewId)).toEqual([aliceReview]);
-    const aliceStats = (await (await app.request('/api/stats', { headers: auth(alice.cookie) })).json()) as {
+    const aliceStats = (await (
+      await app.request('/api/stats', { headers: auth(alice.cookie) })
+    ).json()) as {
       stats: { totalReviews: number };
     };
     expect(aliceStats.stats.totalReviews).toBe(1);
 
     // SSE 订阅同样按归属隔离
     expect(
-      (await app.request(`/api/reviews/${bobReview}/events`, { headers: auth(alice.cookie) })).status,
+      (await app.request(`/api/reviews/${bobReview}/events`, { headers: auth(alice.cookie) }))
+        .status,
     ).toBe(404);
 
     // admin 全量可见
-    const adminList = (await (await app.request('/api/reviews', { headers: auth(admin.cookie) })).json()) as {
+    const adminList = (await (
+      await app.request('/api/reviews', { headers: auth(admin.cookie) })
+    ).json()) as {
       reviews: Array<{ reviewId: string }>;
     };
-    expect(adminList.reviews.map((r) => r.reviewId).sort()).toEqual([aliceReview, bobReview].sort());
+    expect(adminList.reviews.map((r) => r.reviewId).sort()).toEqual(
+      [aliceReview, bobReview].sort(),
+    );
     expect(
       (await app.request(`/api/reviews/${bobReview}`, { headers: auth(admin.cookie) })).status,
     ).toBe(200);
@@ -343,9 +647,13 @@ describe('admin privilege isolation', () => {
     const admin = await registerUser(app, 'boss');
     const alice = await registerUser(app, 'alice');
 
-    expect((await app.request('/api/admin/users', { headers: auth(alice.cookie) })).status).toBe(403);
+    expect((await app.request('/api/admin/users', { headers: auth(alice.cookie) })).status).toBe(
+      403,
+    );
     expect((await app.request('/metrics', { headers: auth(alice.cookie) })).status).toBe(403);
-    expect((await app.request('/api/admin/users', { headers: auth(admin.cookie) })).status).toBe(200);
+    expect((await app.request('/api/admin/users', { headers: auth(admin.cookie) })).status).toBe(
+      200,
+    );
     expect((await app.request('/metrics', { headers: auth(admin.cookie) })).status).toBe(200);
   });
 
@@ -355,10 +663,14 @@ describe('admin privilege isolation', () => {
     const alice = await registerUser(app, 'alice');
 
     // 自锁防护
-    const me = (await (await app.request('/api/auth/me', { headers: auth(admin.cookie) })).json()) as {
+    const me = (await (
+      await app.request('/api/auth/me', { headers: auth(admin.cookie) })
+    ).json()) as {
       user: { id: string };
     };
-    const aliceMe = (await (await app.request('/api/auth/me', { headers: auth(alice.cookie) })).json()) as {
+    const aliceMe = (await (
+      await app.request('/api/auth/me', { headers: auth(alice.cookie) })
+    ).json()) as {
       user: { id: string };
     };
     expect(
@@ -509,7 +821,11 @@ describe('stats and metrics endpoints', () => {
     await vi.waitFor(async () => {
       const response = await app.request('/api/stats', { headers: auth(cookie) });
       const { stats } = (await response.json()) as {
-        stats: { totalReviews: number; totalFindings: number; severityDistribution: Array<{ severity: string; count: number }> };
+        stats: {
+          totalReviews: number;
+          totalFindings: number;
+          severityDistribution: Array<{ severity: string; count: number }>;
+        };
       };
       expect(stats.totalReviews).toBe(1);
       expect(stats.totalFindings).toBe(1);
@@ -578,7 +894,11 @@ describe('review cache integration (方案 3.0 内容哈希去重)', () => {
         rag: { query: async () => [] },
         ignores: { allows: () => true },
         history: { changeFrequency: async () => 0 },
-        providers: { correctness: makeDeps(mode).providers.correctness, security: makeDeps(mode).providers.security, performance: makeDeps(mode).providers.performance },
+        providers: {
+          correctness: makeDeps(mode).providers.correctness,
+          security: makeDeps(mode).providers.security,
+          performance: makeDeps(mode).providers.performance,
+        },
         registry: makeDeps(mode).registry,
         mode,
         reviewCache,
@@ -603,16 +923,22 @@ describe('review cache integration (方案 3.0 内容哈希去重)', () => {
     const second = (await (await post()).json()) as { reviewId: string };
 
     await vi.waitFor(async () => {
-      const list = (await (await app.request('/api/reviews', { headers: auth(cookie) })).json()) as {
+      const list = (await (
+        await app.request('/api/reviews', { headers: auth(cookie) })
+      ).json()) as {
         reviews: Array<{ reviewId: string }>;
       };
       expect(list.reviews).toHaveLength(2);
     });
 
-    const firstReport = (await (await app.request(`/api/reviews/${first.reviewId}`, { headers: auth(cookie) })).json()) as {
+    const firstReport = (await (
+      await app.request(`/api/reviews/${first.reviewId}`, { headers: auth(cookie) })
+    ).json()) as {
       findings: Array<{ title: string }>;
     };
-    const secondReport = (await (await app.request(`/api/reviews/${second.reviewId}`, { headers: auth(cookie) })).json()) as {
+    const secondReport = (await (
+      await app.request(`/api/reviews/${second.reviewId}`, { headers: auth(cookie) })
+    ).json()) as {
       findings: Array<{ title: string }>;
     };
     // 第二次审查对相同内容命中缓存，发现口径与首轮一致
@@ -629,7 +955,9 @@ describe('SSE progress stream', () => {
     const { cookie } = await registerUser(app, 'boss');
     const reviewId = await startReview(app, cookie);
 
-    const streamResponse = app.request(`/api/reviews/${reviewId}/events`, { headers: auth(cookie) });
+    const streamResponse = app.request(`/api/reviews/${reviewId}/events`, {
+      headers: auth(cookie),
+    });
     // 等订阅建立后再放行流水线，保证事件落在订阅窗口内
     await new Promise((resolve) => setTimeout(resolve, 50));
     gate.resolve();
@@ -651,7 +979,9 @@ describe('SSE progress stream', () => {
       expect(detail.status).toBe(200);
     });
 
-    const body = await (await app.request(`/api/reviews/${reviewId}/events`, { headers: auth(cookie) })).text();
+    const body = await (
+      await app.request(`/api/reviews/${reviewId}/events`, { headers: auth(cookie) })
+    ).text();
     expect(body).toContain('event: completed');
     expect(body).toContain(`"reviewId":"${reviewId}"`);
   });
@@ -666,7 +996,9 @@ describe('SSE progress stream', () => {
     const { cookie } = await registerUser(app, 'boss');
     const reviewId = await startReview(app, cookie);
 
-    const streamResponse = app.request(`/api/reviews/${reviewId}/events`, { headers: auth(cookie) });
+    const streamResponse = app.request(`/api/reviews/${reviewId}/events`, {
+      headers: auth(cookie),
+    });
     await new Promise((resolve) => setTimeout(resolve, 50));
     gate.resolve();
 

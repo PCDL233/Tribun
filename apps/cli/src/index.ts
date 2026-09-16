@@ -22,28 +22,30 @@ program
   .option('--mode <mode>', 'fast | full；未传时读取配置')
   .option('--block-on <severity>', '阻断阈值；未传时读取配置')
   .option('--json', '输出 JSON')
-  .action(async (options: {
-    config?: string;
-    mode?: 'fast' | 'full';
-    blockOn?: Severity;
-    json?: boolean;
-    base?: string;
-  }) => {
-    try {
-      const exitCode = await runReview({
-        repoPath: process.cwd(),
-        ...(options.config !== undefined ? { configPath: options.config } : {}),
-        ...(options.mode !== undefined ? { mode: options.mode } : {}),
-        ...(options.blockOn !== undefined ? { blockOn: options.blockOn } : {}),
-        json: options.json ?? false,
-        ...(options.base !== undefined ? { base: options.base } : {}),
-      });
-      process.exitCode = exitCode;
-    } catch (error) {
-      process.stderr.write(`${error instanceof Error ? error.message : 'review failed'}\n`);
-      process.exitCode = EXIT_CODES.configError;
-    }
-  });
+  .action(
+    async (options: {
+      config?: string;
+      mode?: 'fast' | 'full';
+      blockOn?: Severity;
+      json?: boolean;
+      base?: string;
+    }) => {
+      try {
+        const exitCode = await runReview({
+          repoPath: process.cwd(),
+          ...(options.config !== undefined ? { configPath: options.config } : {}),
+          ...(options.mode !== undefined ? { mode: options.mode } : {}),
+          ...(options.blockOn !== undefined ? { blockOn: options.blockOn } : {}),
+          json: options.json ?? false,
+          ...(options.base !== undefined ? { base: options.base } : {}),
+        });
+        process.exitCode = exitCode;
+      } catch (error) {
+        process.stderr.write(`${error instanceof Error ? error.message : 'review failed'}\n`);
+        process.exitCode = EXIT_CODES.configError;
+      }
+    },
+  );
 
 program
   .command('init')
@@ -78,14 +80,21 @@ program
 
 program.command('install-hook').description('安装 .husky/pre-commit 钩子').action(installHook);
 
-program.command('server').description('启动 API Server + Dashboard')
+program
+  .command('server')
+  .description('启动 API Server + Dashboard')
   .option('--port <port>', '监听端口', '8080')
   .option('--db <file>', 'SQLite 审查库路径')
   .option('--web-dist <dir>', 'Dashboard 静态产物目录')
   .option('--config <file>', '配置文件路径（默认 .ai-review.yml）')
-  .action((options: { port: string; db?: string; webDist?: string; config?: string }) => void startServerCommand(options));
+  .action(
+    (options: { port: string; db?: string; webDist?: string; config?: string }) =>
+      void startServerCommand(options),
+  );
 
-program.command('mcp').description('以 stdio MCP 服务器暴露静态分析工具')
+program
+  .command('mcp')
+  .description('以 stdio MCP 服务器暴露静态分析工具')
   .action(() => void startMcpServerCommand());
 
 await program.parseAsync();

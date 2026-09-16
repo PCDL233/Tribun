@@ -24,7 +24,8 @@ export function buildToolsMcpServer(): McpServer {
     'ast_parse',
     {
       title: 'AST parse',
-      description: 'Parse a JavaScript or TypeScript file and return functions, classes, imports, and syntax diagnostics.',
+      description:
+        'Parse a JavaScript or TypeScript file and return functions, classes, imports, and syntax diagnostics.',
       inputSchema: {
         file_path: z.string().describe('Absolute or cwd-relative path of the source file'),
       },
@@ -57,7 +58,8 @@ export function buildToolsMcpServer(): McpServer {
     'dependency_scan',
     {
       title: 'Dependency advisory scan',
-      description: 'Check a package.json manifest against the bundled offline dependency advisory set.',
+      description:
+        'Check a package.json manifest against the bundled offline dependency advisory set.',
       inputSchema: {
         file_path: z.string().describe('Absolute or cwd-relative path to package.json'),
       },

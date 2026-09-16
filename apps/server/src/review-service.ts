@@ -105,8 +105,12 @@ export class ReviewService {
         type: 'completed',
         reviewId,
         riskScore: report.meta.riskScore,
-        blockerCount: report.findings.filter((finding) => finding.severity === 'BLOCKER' && !finding.isFalsePositive).length,
-        blocking: report.findings.some((finding) => severityMeetsThreshold(finding.severity, 'BLOCKER')),
+        blockerCount: report.findings.filter(
+          (finding) => finding.severity === 'BLOCKER' && !finding.isFalsePositive,
+        ).length,
+        blocking: report.findings.some((finding) =>
+          severityMeetsThreshold(finding.severity, 'BLOCKER'),
+        ),
       };
     } catch {
       // 运行中的任务尚未落库；订阅者会从实时广播中收到终态事件。
@@ -117,7 +121,11 @@ export class ReviewService {
   /** 使用原审查的仓库与模式创建新任务。 */
   public rerunReview(reviewId: string, createdBy?: string): string {
     const input = this.store.getReviewInput(reviewId);
-    return this.startReview({ repoPath: input.repoPath, mode: input.mode, ...(createdBy === undefined ? {} : { createdBy }) });
+    return this.startReview({
+      repoPath: input.repoPath,
+      mode: input.mode,
+      ...(createdBy === undefined ? {} : { createdBy }),
+    });
   }
 
   public subscribe(reviewId: string, listener: (event: ReviewStageEvent) => void): () => void {
@@ -156,10 +164,16 @@ export class ReviewService {
         signal: controller.signal,
         onNodeUpdate: (node, update) => {
           if (isPipelineNodeName(node)) {
-            const detail = typeof update === 'object' && update !== null
-              ? JSON.stringify(update).slice(0, 240)
-              : undefined;
-            this.emit({ type: 'stage', reviewId, stage: node, ...(detail === undefined ? {} : { detail }) });
+            const detail =
+              typeof update === 'object' && update !== null
+                ? JSON.stringify(update).slice(0, 240)
+                : undefined;
+            this.emit({
+              type: 'stage',
+              reviewId,
+              stage: node,
+              ...(detail === undefined ? {} : { detail }),
+            });
           }
         },
       });
@@ -182,17 +196,30 @@ export class ReviewService {
         ),
       });
     } catch (e) {
-      const cancelled = controller.signal.aborted || (e instanceof DOMException && e.name === 'AbortError');
+      const cancelled =
+        controller.signal.aborted || (e instanceof DOMException && e.name === 'AbortError');
       const message = cancelled ? '审查已取消' : e instanceof Error ? e.message : String(e);
       this.metrics?.recordFailed();
-      const status = cancelled ? 'cancelled' as const : 'failed' as const;
+      const status = cancelled ? ('cancelled' as const) : ('failed' as const);
       const failureReport: ReviewReport = {
         meta: {
-          reviewId, repoPath: options.repoPath, branch: '—', model: '未完成', mode: options.mode,
-          status, errorMessage: message, riskScore: 0, durationMs: 0, tokenUsed: 0,
+          reviewId,
+          repoPath: options.repoPath,
+          branch: '—',
+          model: '未完成',
+          mode: options.mode,
+          status,
+          errorMessage: message,
+          riskScore: 0,
+          durationMs: 0,
+          tokenUsed: 0,
         },
         summary: cancelled ? '审查任务已取消。' : '审查任务执行失败。',
-        findings: [], qualityNotes: [], suggestions: [], assessment: message, degradedToStatic: [],
+        findings: [],
+        qualityNotes: [],
+        suggestions: [],
+        assessment: message,
+        degradedToStatic: [],
       };
       this.store.saveReport(failureReport, options.createdBy, { errorMessage: message });
       this.emit({ type: cancelled ? 'cancelled' : 'failed', reviewId, message });

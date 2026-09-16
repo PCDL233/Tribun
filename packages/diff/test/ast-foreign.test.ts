@@ -91,11 +91,7 @@ describe('getTreeSitterContext (Phase 4 多语言函数级上下文)', () => {
   });
 
   it('degrades to empty snippet on syntax errors (解析失败自动降级)', () => {
-    const result = getTreeSitterContext(
-      'def broken(:\n    pass',
-      changedLines(2),
-      'python',
-    );
+    const result = getTreeSitterContext('def broken(:\n    pass', changedLines(2), 'python');
     expect(result.snippet).toBe('');
     expect(result.signature).toBeNull();
   });

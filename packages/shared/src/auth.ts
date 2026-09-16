@@ -20,6 +20,12 @@ export const UserSchema = z.object({
   username: z.string(),
   role: UserRoleSchema,
   status: UserStatusSchema,
+  /** 头像 URL（服务端相对路径）；未上传为 null */
+  avatarUrl: z.string().nullable(),
+  /** 已分配的角色 id 列表（RBAC） */
+  roleIds: z.array(z.string()),
+  /** 有效权限集合（角色权限并集），路由访问判断依据 */
+  permissions: z.array(z.string()),
   createdAt: z.string(),
   lastLoginAt: z.string().nullable(),
 });
@@ -33,6 +39,13 @@ export const RegisterSchema = z.object({
   password: z.string().min(8, '密码至少 8 位').max(128),
 });
 export type RegisterInput = z.infer<typeof RegisterSchema>;
+
+/** 管理员创建普通用户：POST /api/admin/users（与注册同约束，但由管理员代办） */
+export const AdminCreateUserSchema = z.object({
+  username: z.string().regex(USERNAME_PATTERN, '用户名需为 3-32 位字母、数字、下划线或连字符'),
+  password: z.string().min(8, '密码至少 8 位').max(128),
+});
+export type AdminCreateUserInput = z.infer<typeof AdminCreateUserSchema>;
 
 export const LoginSchema = z.object({
   username: z.string().min(1),
@@ -69,6 +82,37 @@ export type ResetPasswordResponse = z.infer<typeof ResetPasswordResponseSchema>;
 /** GET /api/admin/users */
 export const UserListResponseSchema = z.object({ users: z.array(UserSchema) });
 export type UserListResponse = z.infer<typeof UserListResponseSchema>;
+
+/** 角色模型（RBAC 权限=动态路由访问路径集合） */
+export const RoleSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string().nullable(),
+  priority: z.number().int(),
+  permissions: z.array(z.string()),
+  isSystem: z.boolean(),
+  createdAt: z.string(),
+});
+export type Role = z.infer<typeof RoleSchema>;
+
+export const RoleListResponseSchema = z.object({ roles: z.array(RoleSchema) });
+export type RoleListResponse = z.infer<typeof RoleListResponseSchema>;
+
+export const RoleResponseSchema = z.object({ role: RoleSchema });
+export type RoleResponse = z.infer<typeof RoleResponseSchema>;
+
+/** 创建/更新角色入参 */
+export const RoleInputSchema = z.object({
+  name: z.string().min(1, '角色名不能为空').max(32),
+  description: z.string().max(200).nullable().optional(),
+  priority: z.number().int().min(1).max(999),
+  permissions: z.array(z.string()),
+});
+export type RoleInput = z.infer<typeof RoleInputSchema>;
+
+/** 给用户分配角色（整体替换该用户的角色集合） */
+export const AssignRolesSchema = z.object({ roleIds: z.array(z.string()) });
+export type AssignRolesInput = z.infer<typeof AssignRolesSchema>;
 
 /** GET /api/admin/overview —— 后台系统概览卡片数据源 */
 const AdminRecentFailureSchema = z.object({

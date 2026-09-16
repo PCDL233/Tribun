@@ -1,5 +1,5 @@
 import { AGENT_DIMENSIONS, SEVERITIES } from '@ai-review/shared';
-import { index, integer, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
+import { index, integer, primaryKey, real, sqliteTable, text } from 'drizzle-orm/sqlite-core';
 
 /**
  * 审查记录表（对齐方案六 reviews 表）。
@@ -95,6 +95,8 @@ export const users = sqliteTable('users', {
   username: text('username').notNull().unique(),
   /** scrypt 哈希（salt$hash 格式），明文密码与哈希均不出服务端 */
   passwordHash: text('password_hash').notNull(),
+  /** 头像文件在服务端的相对访问路径；未上传为 NULL */
+  avatarUrl: text('avatar_url'),
   role: text('role', { enum: ['admin', 'user'] })
     .notNull()
     .default('user'),
@@ -118,6 +120,40 @@ export const sessions = sqliteTable('sessions', {
     .notNull()
     .$defaultFn(() => new Date().toISOString()),
 });
+
+/** 角色表（RBAC）：权限为系统动态路由的访问路径集合（JSON 数组） */
+export const roles = sqliteTable('roles', {
+  id: text('id').primaryKey(),
+  /** 角色名唯一 */
+  name: text('name').notNull().unique(),
+  description: text('description'),
+  /** 数值越小优先级越高；多角色时取最高优先级角色作为默认角色 */
+  priority: integer('priority').notNull().default(100),
+  /** 权限集合：JSON 字符串数组，元素为路由路径，'*' 表示全部 */
+  permissions: text('permissions').notNull().default('[]'),
+  /** 内置角色不可删除（admin/user） */
+  isSystem: integer('is_system', { mode: 'boolean' }).notNull().default(false),
+  createdAt: text('created_at')
+    .notNull()
+    .$defaultFn(() => new Date().toISOString()),
+});
+
+/** 用户-角色关联表（多对多） */
+export const userRoles = sqliteTable(
+  'user_roles',
+  {
+    userId: text('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    roleId: text('role_id')
+      .notNull()
+      .references(() => roles.id, { onDelete: 'cascade' }),
+    createdAt: text('created_at')
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [primaryKey({ columns: [table.userId, table.roleId] })],
+);
 
 export type ReviewRow = typeof reviews.$inferSelect;
 export type FindingRow = typeof findings.$inferSelect;

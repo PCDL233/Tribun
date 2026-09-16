@@ -5,6 +5,8 @@ import { ReviewReportSchema } from './report.js';
 
 // 认证/用户契约无 node 依赖，随 api 子路径一并供浏览器端消费
 export * from './auth.js';
+export { FindingSchema } from './finding.js';
+export type { Finding } from './finding.js';
 
 /**
  * —— API 契约（方案 2.3：前端零手工类型，全部推导自 shared）——
@@ -184,10 +186,14 @@ export type ReviewStats = z.infer<typeof ReviewStatsSchema>;
 /** GET /api/stats */
 export const ReviewStatsResponseSchema = z.object({ stats: ReviewStatsSchema });
 
-/** 管理后台配置读写契约；API key 只允许环境变量引用或由服务端返回的掩码。 */
+/** 管理后台配置读写契约；API key 支持环境变量引用、直接填写或由服务端返回的掩码。 */
 export const AdminConfigSchema = AiReviewConfigSchema.superRefine((config, ctx) => {
-  if (config.llm.apiKey !== '********' && !/^\$\{[A-Z0-9_]+\}$/.test(config.llm.apiKey)) {
-    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['llm', 'apiKey'], message: 'apiKey must be an environment variable reference such as ${AI_REVIEW_API_KEY}' });
+  if (config.llm.apiKey !== '********' && config.llm.apiKey.trim().length === 0) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['llm', 'apiKey'],
+      message: 'apiKey cannot be empty',
+    });
   }
 });
 export const AdminConfigResponseSchema = z.object({ config: AiReviewConfigSchema });

@@ -17,9 +17,11 @@ export function deriveQualityNotes(
 
 /** 从发现中提取去重后的改进建议，避免报告只展示问题而没有行动项。 */
 export function deriveSuggestions(findings: readonly Finding[]): string[] {
-  return [...new Set(
-    findings
-      .map((finding) => finding.suggestion)
-      .filter((value): value is string => value !== undefined && value.trim() !== ''),
-  )];
+  return [
+    ...new Set(
+      findings
+        .map((finding) => finding.suggestion)
+        .filter((value): value is string => value !== undefined && value.trim() !== ''),
+    ),
+  ];
 }

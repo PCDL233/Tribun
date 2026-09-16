@@ -56,10 +56,13 @@ describe('createConfiguredProvider', () => {
 
   it('tries local Ollama before mock when the cloud key is still a placeholder', async () => {
     process.env.AI_REVIEW_OLLAMA_BASE_URL = 'http://ollama.test/v1';
-    const fetchMock = vi.fn(async () => new Response(
-      JSON.stringify({ choices: [{ message: { content: '[]' } }] }),
-      { status: 200, headers: { 'content-type': 'application/json' } },
-    ));
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(JSON.stringify({ choices: [{ message: { content: '[]' } }] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        }),
+    );
     vi.stubGlobal('fetch', fetchMock);
 
     const config = AiReviewConfigSchema.parse({

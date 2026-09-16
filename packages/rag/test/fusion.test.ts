@@ -13,7 +13,12 @@ describe('rrfFuse (方案 3.5 倒数排名融合)', () => {
     const fused = rrfFuse(vectorHits, bm25Hits, 5);
     // a 双路命中且两路均靠前，应胜过仅单路命中的 b/x
     expect(fused[0]?.id).toBe('a');
-    expect(fused.slice(1).map((result) => result.id).sort()).toEqual(['b', 'c', 'x']);
+    expect(
+      fused
+        .slice(1)
+        .map((result) => result.id)
+        .sort(),
+    ).toEqual(['b', 'c', 'x']);
   });
 
   it('respects topK and applies the path filter to both channels', () => {

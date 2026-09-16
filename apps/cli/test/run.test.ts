@@ -68,10 +68,7 @@ describe('runReview', () => {
   it('blocks on a staged hardcoded secret detected by static analysis', async () => {
     const repo = makeTempRepo();
     repos.push(repo);
-    writeFileSync(
-      join(repo, 'config.ts'),
-      "export const awsAccessKey = 'AKIAIOSFODNN7EXAMPLE';\n",
-    );
+    writeFileSync(join(repo, 'config.ts'), "export const awsAccessKey = 'AKIAIOSFODNN7EXAMPLE';\n");
     execFileSync('git', ['add', 'config.ts'], { cwd: repo, stdio: 'pipe' });
     await expect(
       runReview({ repoPath: repo, mode: 'fast', blockOn: 'BLOCKER', json: true }),
@@ -88,10 +85,7 @@ describe('runReview', () => {
     writeFileSync(join(repo, 'README.md'), '# demo\n');
     git('add', 'README.md');
     git('commit', '-m', 'baseline', '--no-verify');
-    writeFileSync(
-      join(repo, 'config.ts'),
-      "export const awsAccessKey = 'AKIAIOSFODNN7EXAMPLE';\n",
-    );
+    writeFileSync(join(repo, 'config.ts'), "export const awsAccessKey = 'AKIAIOSFODNN7EXAMPLE';\n");
     git('add', 'config.ts');
     git('commit', '-m', 'add secret', '--no-verify');
 

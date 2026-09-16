@@ -49,9 +49,7 @@ export const DEFAULT_COMPLEXITY_THRESHOLD = 15;
  * @param options 复杂度阈值等工具参数
  * @returns 含默认工具的注册表
  */
-export function buildDefaultRegistry(options?: {
-  complexityThreshold?: number;
-}): ToolRegistry {
+export function buildDefaultRegistry(options?: { complexityThreshold?: number }): ToolRegistry {
   const threshold = options?.complexityThreshold ?? DEFAULT_COMPLEXITY_THRESHOLD;
   const registry = new ToolRegistry();
   registry.register({

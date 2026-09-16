@@ -2,5 +2,8 @@
   "name": "@ai-review/tsconfig",
   "version": "1.0.0",
   "private": true,
-  "files": ["base.json", "package.json"]
+  "files": [
+    "base.json",
+    "package.json"
+  ]
 }

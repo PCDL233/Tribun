@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -11,6 +11,7 @@ import type { PipelineDeps } from '@ai-review/core';
 import { AiReviewConfigSchema, loadConfig } from '@ai-review/shared';
 import type { AiReviewConfig } from '@ai-review/shared';
 import { buildDefaultRegistry } from '@ai-review/tools';
+import { AvatarStore } from './avatar.js';
 import { buildApp } from './app.js';
 import { createStoreReviewCache } from './cache.js';
 import { createReviewMetrics } from './metrics.js';
@@ -45,7 +46,12 @@ function parseArgs(argv: readonly string[]): ServerCliOptions {
 }
 
 /** 组装服务端审查流水线；Provider 无法使用时仍保留确定性的 mock fallback。 */
-function createPipelineDeps(repoPath: string, mode: 'fast' | 'full', config: AiReviewConfig, knowledge: ReturnType<typeof createKnowledgeManager>): PipelineDeps {
+function createPipelineDeps(
+  repoPath: string,
+  mode: 'fast' | 'full',
+  config: AiReviewConfig,
+  knowledge: ReturnType<typeof createKnowledgeManager>,
+): PipelineDeps {
   const git = createGitRunner(repoPath);
   return {
     gitReader: new GitReader(git),
@@ -53,11 +59,14 @@ function createPipelineDeps(repoPath: string, mode: 'fast' | 'full', config: AiR
     ignores: createIgnoreRules(config.review.ignorePatterns),
     history: createFileHistory(git),
     providers: createConfiguredProviders(config),
-    registry: buildDefaultRegistry({ complexityThreshold: config.staticAnalysis.complexityThreshold }),
+    registry: buildDefaultRegistry({
+      complexityThreshold: config.staticAnalysis.complexityThreshold,
+    }),
     enabledTools: config.staticAnalysis.enabledTools,
     ragTopK: config.rag.topK,
     budget: new TokenBudget(config.llm.maxTokensPerReview),
-    modelName: config.llm.provider === 'mock' ? 'mock + 静态分析' : `${config.llm.model} + 静态分析`,
+    modelName:
+      config.llm.provider === 'mock' ? 'mock + 静态分析' : `${config.llm.model} + 静态分析`,
     mode,
   };
 }
@@ -75,6 +84,8 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
   const sqlite = openSqlite(options.dbFile);
   const store = new ReviewStore(sqlite);
   const users = new UserStore(sqlite);
+  // 存量迁移：为 RBAC 引入前创建、尚无角色分配的账号补发内置角色（admin→role-admin 等）
+  users.backfillDefaultRoles();
   const metrics = createReviewMetrics();
   const reviewCache = createStoreReviewCache(store);
   const service = new ReviewService(
@@ -83,7 +94,17 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
     runReviewPipeline,
     metrics,
   );
-  const app = buildApp({ store, users, service, metrics, configPath, knowledge });
+  // 头像目录与 DB 同目录（默认 .ai-review-cache/avatars），由 AvatarStore 自行 mkdir
+  const avatarStore = new AvatarStore(join(dirname(options.dbFile), 'avatars'));
+  const app = buildApp({
+    store,
+    users,
+    service,
+    metrics,
+    configPath,
+    knowledge,
+    avatars: avatarStore,
+  });
 
   if (options.webDistDir !== undefined && existsSync(options.webDistDir)) {
     // Hono 同时托管 Dashboard 静态产物（方案 3.10：单容器提供 API + 前端）

@@ -12,6 +12,7 @@ import { Spin } from 'antd';
 import type { User } from '@ai-review/shared/api';
 import { fetchMe } from './api/auth';
 import { AUTH_QUERY_KEY } from './hooks/use-auth';
+import { canAccessPath, firstPermittedAdminPath, hasAdminAccess } from './permissions';
 import { queryClient } from './query-client';
 import { AdminLayout } from './layouts/AdminLayout';
 import { UserLayout } from './layouts/UserLayout';
@@ -21,7 +22,13 @@ import { ProfilePage } from './pages/ProfilePage';
 import { RegisterPage } from './pages/RegisterPage';
 import { AdminOverviewPage } from './pages/admin/AdminOverviewPage';
 import { AdminUsersPage } from './pages/admin/AdminUsersPage';
+import { AdminRolesPage } from './pages/admin/AdminRolesPage';
 import { AdminConfigPage } from './pages/admin/AdminConfigPage';
+import { AdminAiConfigPage } from './pages/admin/AdminAiConfigPage';
+import { AdminToolsPage } from './pages/admin/AdminToolsPage';
+import { AdminInitPage } from './pages/admin/AdminInitPage';
+import { AdminHookPage } from './pages/admin/AdminHookPage';
+import { AdminMetricsPage } from './pages/admin/AdminMetricsPage';
 import { AdminKnowledgePage } from './pages/admin/AdminKnowledgePage';
 import { ReportDetailView } from './views/ReportDetailView';
 import { ReviewListView } from './views/ReviewListView';
@@ -85,7 +92,14 @@ const userRoute = createRoute({
   getParentRoute: () => rootRoute,
   id: 'app',
   component: UserLayout,
-  beforeLoad: ({ context, location }) => requireUser(context, location.href),
+  beforeLoad: async ({ context, location }) => {
+    const user = await requireUser(context, location.href);
+    // RBAC：无该路由权限时回首页；但若已在首页（兜底页），不再重定向以避免死循环
+    if (location.pathname !== '/' && !canAccessPath(user.permissions, location.pathname)) {
+      // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect is implemented as a thrown control-flow value.
+      throw redirect({ to: '/' });
+    }
+  },
 });
 
 const homeRoute = createRoute({
@@ -137,9 +151,7 @@ const reviewDetailRoute = createRoute({
 function ReviewDetailRoute(): ReactElement {
   const { reviewId } = reviewDetailRoute.useParams();
   const navigate = useNavigate();
-  return (
-    <ReportDetailView reviewId={reviewId} onBack={() => void navigate({ to: '/reviews' })} />
-  );
+  return <ReportDetailView reviewId={reviewId} onBack={() => void navigate({ to: '/reviews' })} />;
 }
 
 const statsRoute = createRoute({
@@ -161,7 +173,8 @@ const adminRoute = createRoute({
   component: AdminLayout,
   beforeLoad: async ({ context, location }) => {
     const user = await requireUser(context, location.href);
-    if (user.role !== 'admin') {
+    // 具备任一管理权限（admin 角色 / '*' / 任一 /admin* 页面）即可进入管理后台
+    if (!hasAdminAccess(user.permissions, user.role)) {
       // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect is implemented as a thrown control-flow value.
       throw redirect({ to: '/' });
     }
@@ -171,6 +184,17 @@ const adminRoute = createRoute({
 const adminIndexRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: '/',
+  beforeLoad: async ({ context }) => {
+    const user = await requireUser(context, '');
+    // 无系统概览（/admin）权限时，落到第一个可访问的管理子页面
+    if (!canAccessPath(user.permissions, '/admin')) {
+      const first = firstPermittedAdminPath(user.permissions);
+      if (first !== null) {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- TanStack Router redirect is implemented as a thrown control-flow value.
+        throw redirect({ to: first });
+      }
+    }
+  },
   component: AdminOverviewPage,
 });
 
@@ -180,10 +204,46 @@ const adminUsersRoute = createRoute({
   component: AdminUsersPage,
 });
 
+const adminRolesRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/roles',
+  component: AdminRolesPage,
+});
+
 const adminConfigRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: '/config',
   component: AdminConfigPage,
+});
+
+const adminAiConfigRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/ai',
+  component: AdminAiConfigPage,
+});
+
+const adminToolsRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/tools',
+  component: AdminToolsPage,
+});
+
+const adminInitRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/init',
+  component: AdminInitPage,
+});
+
+const adminHookRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/hook',
+  component: AdminHookPage,
+});
+
+const adminMetricsRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/metrics',
+  component: AdminMetricsPage,
 });
 
 const adminKnowledgeRoute = createRoute({
@@ -207,7 +267,18 @@ export const routeTree = rootRoute.addChildren([
     statsRoute,
     profileRoute,
   ]),
-  adminRoute.addChildren([adminIndexRoute, adminUsersRoute, adminConfigRoute, adminKnowledgeRoute]),
+  adminRoute.addChildren([
+    adminIndexRoute,
+    adminUsersRoute,
+    adminRolesRoute,
+    adminConfigRoute,
+    adminAiConfigRoute,
+    adminToolsRoute,
+    adminInitRoute,
+    adminHookRoute,
+    adminMetricsRoute,
+    adminKnowledgeRoute,
+  ]),
 ]);
 
 export const router = createRouter({

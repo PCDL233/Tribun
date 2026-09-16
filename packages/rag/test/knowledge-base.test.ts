@@ -83,7 +83,10 @@ describe('KnowledgeBase (方案 3.5 混合检索 + 增量索引)', () => {
       join(docs, 'auth.md'),
       '# Auth\n\n## Login\npassword login verifies user credentials before session token issuance\n',
     );
-    writeFileSync(join(docs, 'garden.md'), '# Garden\n\nroses and tulips bloom in spring sunlight\n');
+    writeFileSync(
+      join(docs, 'garden.md'),
+      '# Garden\n\nroses and tulips bloom in spring sunlight\n',
+    );
     return new KnowledgeBase(join(tempDir, 'vectors'), makeHashEmbeddingModel());
   }
 

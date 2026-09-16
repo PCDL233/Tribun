@@ -7,7 +7,6 @@ import type { AiReviewConfig } from './config-schema.js';
 export { AiReviewConfigSchema } from './config-schema.js';
 export type { AiReviewConfig } from './config-schema.js';
 
-
 /** 递归解析字符串中的 ${ENV_NAME} 引用；env 未定义时保留占位符（由 provider 层报错） */
 export function resolveEnvRefs(node: unknown): unknown {
   if (typeof node === 'string') {

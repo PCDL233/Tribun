@@ -1,6 +1,12 @@
 import type { CodeContext, Finding, FileContext } from '@ai-review/shared';
 import { describe, expect, it } from 'vitest';
-import { crossValidate, dedupeFindings, reclassifySeverity, scoreConfidence, sortFindings } from '../src/index.js';
+import {
+  crossValidate,
+  dedupeFindings,
+  reclassifySeverity,
+  scoreConfidence,
+  sortFindings,
+} from '../src/index.js';
 
 function makeFinding(overrides: Partial<Finding> & { title: string }): Finding {
   return {
@@ -46,7 +52,11 @@ const testContext: CodeContext = { files: [testFileContext], metadata: featureCo
 describe('reclassifySeverity', () => {
   it('downgrades high severities inside test or docs files', () => {
     const findings = [
-      makeFinding({ title: 'hardcoded value', severity: 'BLOCKER', filePath: 'test/login.test.ts' }),
+      makeFinding({
+        title: 'hardcoded value',
+        severity: 'BLOCKER',
+        filePath: 'test/login.test.ts',
+      }),
     ];
     const reclassified = reclassifySeverity(findings, testContext);
     expect(reclassified[0]?.severity).toBe('NIT');
@@ -115,7 +125,12 @@ describe('sortFindings', () => {
 describe('crossValidate', () => {
   it('composes reclassification, confidence scoring, dedupe, and sorting', () => {
     const findings = [
-      makeFinding({ title: 'test blocker', severity: 'BLOCKER', confidence: 0.4, filePath: 'test/login.test.ts' }),
+      makeFinding({
+        title: 'test blocker',
+        severity: 'BLOCKER',
+        confidence: 0.4,
+        filePath: 'test/login.test.ts',
+      }),
       makeFinding({ title: 'dup', agent: 'security', confidence: 0.8 }),
       makeFinding({ title: 'dup', agent: 'security', confidence: 0.6 }),
     ];

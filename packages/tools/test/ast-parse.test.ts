@@ -30,7 +30,9 @@ function makeFile(stagedContent: string, changedLines: number[]): FileContext {
 
 describe('analyzeAst', () => {
   it('returns functions, classes, imports and syntax diagnostics', () => {
-    const summary = analyzeAst("import { x } from 'module';\nclass Demo {}\nfunction run(value: number) { return value; }");
+    const summary = analyzeAst(
+      "import { x } from 'module';\nclass Demo {}\nfunction run(value: number) { return value; }",
+    );
     expect(summary.imports).toEqual(['module']);
     expect(summary.classes[0]?.name).toBe('Demo');
     expect(summary.functions[0]?.name).toBe('run');
@@ -52,9 +54,11 @@ describe('astFindings', () => {
   it('suggests removing imports that are added but never referenced', () => {
     const source = "import { unused } from 'module';\nexport function run() { return 1; }";
     const findings = astFindings([makeFile(source, [1, 2])]);
-    expect(findings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ title: 'Unused import: unused', severity: 'NIT' }),
-    ]));
+    expect(findings).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ title: 'Unused import: unused', severity: 'NIT' }),
+      ]),
+    );
   });
 
   it('skips non JS/TS files and unchanged diagnostics', () => {

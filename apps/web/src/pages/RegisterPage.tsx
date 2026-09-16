@@ -35,7 +35,7 @@ export function RegisterPage(props: RegisterPageProps): ReactElement {
           <BrandMark />
           <div>
             <div className="auth-brand-title">ReviewFlow</div>
-            <div className="app-brand-subtitle">AI CODE REVIEW</div>
+            <div className="app-brand-subtitle">CODE REVIEW CONSOLE</div>
           </div>
         </div>
         <div className="auth-visual-copy">
@@ -53,10 +53,10 @@ export function RegisterPage(props: RegisterPageProps): ReactElement {
       <section className="auth-form-side">
         <Card className="auth-card">
           <Typography.Title level={2} className="auth-form-title">
-            创建工作区
+            注册账号
           </Typography.Title>
           <Typography.Paragraph className="auth-form-subtitle">
-            注册一个账号，开始你的第一轮 AI 代码审查。
+            注册一个账号，开始你的第一轮代码审查。
           </Typography.Paragraph>
           {registerMutation.isError ? (
             <Alert
@@ -109,7 +109,7 @@ export function RegisterPage(props: RegisterPageProps): ReactElement {
               <Input.Password placeholder="再次输入密码" autoComplete="new-password" />
             </Form.Item>
             <Button type="primary" htmlType="submit" block loading={registerMutation.isPending}>
-              创建账号
+              注册
             </Button>
           </Form>
           <Typography.Paragraph className="auth-footnote">
