@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { ReactElement } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Form, Input, Select, Space, Steps, Tag, Typography } from 'antd';
+import { Alert, Button, Card, Form, Input, Select, Space, Steps, Tag, Tooltip, Typography } from 'antd';
 import { STAGE_GROUPS, useReviewEvents } from '../hooks/use-review-events';
 import type { CompletedResult } from '../hooks/use-review-events';
 import { describeError } from '../parse-response';
@@ -70,7 +70,14 @@ export function RunReviewView(props: RunReviewViewProps): ReactElement {
               ]}
             />
           </Form.Item>
-          <Form.Item label="阻断阈值" name="blockOn" extra="达到该级别时，审查结果将标记为阻断。">
+          <Form.Item
+            label={
+              <Tooltip title="达到该级别时，审查结果将标记为阻断。">
+                <span>阻断阈值</span>
+              </Tooltip>
+            }
+            name="blockOn"
+          >
             <Select
               options={[
                 { value: 'BLOCKER', label: 'BLOCKER · 严重问题' },
@@ -79,7 +86,7 @@ export function RunReviewView(props: RunReviewViewProps): ReactElement {
               ]}
             />
           </Form.Item>
-          <Form.Item label=" " colon={false}>
+          <Form.Item className="review-form-actions">
             <Button type="primary" htmlType="submit" loading={startMutation.isPending}>
               开始审查
             </Button>

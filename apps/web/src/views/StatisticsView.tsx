@@ -50,8 +50,8 @@ function buildTrendOption(stats: ReviewStats): EChartsCoreOption {
   return {
     color: ['#4f46e5', '#14b8a6'],
     tooltip: { ...tooltipBase, trigger: 'axis' },
-    legend: { ...legendBase, data: ['平均风险分', '审查次数'] },
-    grid: { left: 14, right: 18, top: 46, bottom: 12, containLabel: true },
+    legend: { ...legendBase, top: 0, data: ['平均风险分', '审查次数'] },
+    grid: { left: 14, right: 18, top: 64, bottom: 12, containLabel: true },
     xAxis: {
       type: 'category',
       boundaryGap: false,
@@ -179,8 +179,8 @@ function buildRiskyFilesOption(stats: ReviewStats): EChartsCoreOption {
   const files = [...stats.topRiskyFiles].reverse();
   return {
     tooltip: { ...tooltipBase, trigger: 'axis' },
-    legend: { ...legendBase, data: ['发现数', 'BLOCKER'] },
-    grid: { left: 8, right: 18, top: 44, bottom: 8, containLabel: true },
+    legend: { ...legendBase, top: 0, data: ['发现数', 'BLOCKER'] },
+    grid: { left: 8, right: 18, top: 64, bottom: 8, containLabel: true },
     xAxis: { type: 'value', splitLine, axisLabel: chartText, axisLine: { show: false } },
     yAxis: {
       type: 'category',

@@ -468,13 +468,10 @@ select {
   display: grid;
   grid-template-columns: minmax(280px, 1.6fr) minmax(180px, 0.75fr) minmax(230px, 1fr) auto;
   gap: 16px;
-  align-items: start;
+  align-items: end;
 }
 .review-form .ant-form-item {
   margin-bottom: 0;
-}
-.review-form .ant-form-item:last-child {
-  padding-top: 29px;
 }
 .progress-panel {
   display: flex;
@@ -758,9 +755,6 @@ select {
   .review-form {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .review-form .ant-form-item:last-child {
-    padding-top: 29px;
-  }
 }
 @media (max-width: 800px) {
   .app-topbar {
@@ -795,9 +789,6 @@ select {
   }
   .review-form {
     grid-template-columns: 1fr;
-  }
-  .review-form .ant-form-item:last-child {
-    padding-top: 0;
   }
   .review-form .ant-btn {
     width: 100%;

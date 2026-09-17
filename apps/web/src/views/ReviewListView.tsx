@@ -44,10 +44,12 @@ function buildColumns(opts: {
     {
       title: '审查 ID',
       dataIndex: 'reviewId',
-      width: 170,
+      width: 230,
       render: (reviewId: string) => (
         <Typography.Link onClick={() => opts.onOpen(reviewId)}>
-          <Typography.Text code>{reviewId}</Typography.Text>
+          <Typography.Text code style={{ whiteSpace: 'nowrap' }}>
+            {reviewId}
+          </Typography.Text>
         </Typography.Link>
       ),
     },

@@ -175,7 +175,7 @@ export function AdminConfigPage(): ReactElement {
             </Card>
           </Col>
         </Row>
-        <Space>
+        <Space style={{ marginTop: 16 }}>
           <Button type="primary" htmlType="submit" loading={saveMutation.isPending}>
             保存配置
           </Button>
