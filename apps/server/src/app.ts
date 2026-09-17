@@ -37,6 +37,7 @@ import {
   KnowledgeReindexResponseSchema,
   KnowledgeStatusResponseSchema,
 } from '@ai-review/shared';
+import type { ServerRuntime } from '@ai-review/shared';
 import { renderHtml, renderJson, renderMarkdown } from '@ai-review/report';
 import { analyzeComplexity, compileCustomRulePattern, scanDiffTextForSecrets, testCustomRuleOnSamples } from '@ai-review/tools';
 import {
@@ -55,10 +56,11 @@ import { securityHeaders } from './security-headers.js';
 import { AuditService, createNoopAudit } from './audit.js';
 import type { ReviewService } from './review-service.js';
 
-/** POST /api/reviews 入参（方案 2.3：API 入参经 zod 校验） */
+/** POST /api/reviews 入参（方案 2.3：API 入参经 zod 校验）。mode/blockOn 可选：
+ * 未传时由服务端回退系统配置的 review.mode / review.blockOn（见处理器）。 */
 export const StartReviewSchema = z.object({
   repoPath: z.string().min(1),
-  mode: z.enum(['fast', 'full']).default('fast'),
+  mode: z.enum(['fast', 'full']).optional(),
   blockOn: z.enum(['BLOCKER', 'WARNING', 'NIT']).optional(),
 });
 
@@ -81,6 +83,12 @@ export type AppDeps = {
   allowedRoots?: readonly string[];
   /** 是否允许开放注册（方案 8）；缺省：已存在用户后关闭 */
   registrationOpen?: boolean;
+  /** 会话 Cookie 是否携带 Secure；缺省：生产环境自动开启 */
+  cookieSecure?: boolean;
+  /** 反向代理部署时信任 X-Forwarded-For（限流/审计共用） */
+  trustProxy?: boolean;
+  /** 服务端运行环境只读信息（端口/DB 路径/静态目录等），供配置页展示 */
+  runtime?: ServerRuntime;
   /** 可选知识库管理器，未装配时返回 idle 状态 */
   knowledge?: KnowledgeManager;
   /** 可选头像存储；未装配时头像上传返回 503 */
@@ -217,7 +225,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   const audit = deps.audit ?? createNoopAudit();
   // 审计埋点用请求元信息：客户端 IP（与限流同一判定）与 User-Agent
   const requestMeta = (c: import('hono').Context): { ip: string; userAgent: string } => ({
-    ip: getClientIp(c),
+    ip: getClientIp(c, deps.trustProxy),
     userAgent: c.req.header('user-agent') ?? '',
   });
   const actor = (c: import('hono').Context): { userId: string; username: string } => {
@@ -249,6 +257,8 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     users: deps.users,
     audit,
     ...(deps.registrationOpen === undefined ? {} : { registrationOpen: deps.registrationOpen }),
+    ...(deps.cookieSecure === undefined ? {} : { cookieSecure: deps.cookieSecure }),
+    ...(deps.trustProxy === undefined ? {} : { trustProxy: deps.trustProxy }),
   });
 
   // —— 数据隔离：除 auth 前缀外所有 /api 请求必须登录 ——
@@ -320,9 +330,14 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   );
 
   app.post('/api/reviews', zValidator('json', StartReviewSchema), (c) => {
-    const { repoPath, mode, blockOn } = c.req.valid('json');
+    const { repoPath, mode: bodyMode, blockOn: bodyBlockOn } = c.req.valid('json');
     const meta = requestMeta(c);
     const me = actor(c);
+    // 未显式选择模式/阻断阈值时回退系统配置默认值（config.review.mode / blockOn），
+    // 保证管理后台「默认审查模式/阻断阈值」对 web 发起的审查生效
+    const liveConfig = readAdminConfig(deps.configPath ?? '.ai-review.yml');
+    const mode = bodyMode ?? liveConfig.review.mode;
+    const blockOn = bodyBlockOn ?? liveConfig.review.blockOn;
     // 方案 3：仅允许审查落在白名单根目录内的仓库，防任意本地路径读取
     try {
       assertRepoPathAllowed(repoPath, deps.allowedRoots ?? [process.cwd()]);
@@ -335,7 +350,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
       repoPath,
       mode,
       createdBy,
-      ...(blockOn === undefined ? {} : { blockOn }),
+      blockOn,
     });
     audit.operation({ ...me, ...meta, action: 'start_review', resource: 'review', resourceId: reviewId, detail: JSON.stringify({ repoPath, mode }), status: 'success' });
     return c.json({ reviewId }, 202);
@@ -524,10 +539,25 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   });
 
   // —— 管理员后台（配置、知识库、用户管理、系统概览）——
+  // AdminConfig 响应载荷：掩码配置 + 只读运行环境（未注入运行时使用兜底值，供测试/独立装配）
+  const adminConfigPayload = (config: ReturnType<typeof AiReviewConfigSchema.parse>): {
+    config: ReturnType<typeof AiReviewConfigSchema.parse>;
+    runtime: ServerRuntime;
+  } => ({
+    config: maskApiKey(config),
+    runtime: deps.runtime ?? {
+      port: 8080,
+      dbPath: '.ai-review-cache/reviews.db',
+      webDistDir: null,
+      configPath: deps.configPath ?? '.ai-review.yml',
+      allowedRoots: [...(deps.allowedRoots ?? [process.cwd()])],
+    },
+  });
+
   app.get('/api/admin/config', requireAnyPermission('/admin/config', '/admin/ai'), (c) => {
     const configPath = deps.configPath ?? '.ai-review.yml';
     const config = readAdminConfig(configPath);
-    return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(config) }));
+    return c.json(AdminConfigResponseSchema.parse(adminConfigPayload(config)));
   });
 
   app.put(
@@ -551,7 +581,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
       // 只记录变更字段名，避免 apiKey 等敏感值进入审计日志
       const fields = Object.keys(config).join(',');
       audit.operation({ ...me, ...meta, action: 'save_config', resource: 'config', detail: JSON.stringify({ fields }), status: 'success' });
-      return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(persisted) }));
+      return c.json(AdminConfigResponseSchema.parse(adminConfigPayload(persisted)));
     },
   );
 
@@ -566,7 +596,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const config = AiReviewConfigSchema.parse({});
     writeFileSync(configPath, stringifyYaml(config), 'utf8');
     audit.operation({ ...me, ...meta, action: 'save_config', resource: 'config', status: 'success' });
-    return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(config) }));
+    return c.json(AdminConfigResponseSchema.parse(adminConfigPayload(config)));
   });
 
   // —— 自定义审查规则（admin）：规则随配置持久化，经 custom_rule_check 工具在审查时生效 ——

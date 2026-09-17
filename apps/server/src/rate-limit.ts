@@ -30,9 +30,10 @@ export interface RateLimitOptions {
  *   所有请求的 socket 地址都是代理 IP，须改用 XFF；此时取「最后一个」值——
  *   单层代理会把真实客户端 IP 追加在末尾，首值可被客户端伪造
  */
-export function getClientIp(c: Context): string {
-  const trustProxy = process.env.AI_REVIEW_TRUST_PROXY === 'true';
-  if (trustProxy) {
+export function getClientIp(c: Context, trustProxy?: boolean): string {
+  const useForwarded =
+    trustProxy ?? process.env.AI_REVIEW_TRUST_PROXY === 'true';
+  if (useForwarded) {
     const forwarded = c.req.header('x-forwarded-for');
     if (forwarded !== undefined && forwarded !== '') {
       const parts = forwarded.split(',');

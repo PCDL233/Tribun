@@ -14,10 +14,10 @@ review:
     - maintainability
   blockOn: BLOCKER
   ignorePatterns:
-    - '*.lock'
+    - "*.lock"
     - pnpm-lock.yaml
     - dist/**
-    - '*.min.js'
+    - "*.min.js"
 rag:
   enabled: true
   knowledgeBasePaths:
@@ -30,8 +30,23 @@ staticAnalysis:
     - complexity_check
     - secret_scan
     - dependency_scan
+    - custom_rule_check
   complexityThreshold: 15
+customRules: []
 report:
   format: markdown
   outputDir: .ai-review-reports
   includePraise: true
+logging:
+  enabled: true
+  console: true
+  file: true
+  dir: logs
+  maxDays: 30
+server:
+  allowedRoots: []
+  maxConcurrent: 3
+  cookieSecure: false
+  allowRegister: false
+  trustProxy: false
+  ollamaModel: qwen3-coder:30b

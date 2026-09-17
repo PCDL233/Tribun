@@ -118,6 +118,27 @@ export const AiReviewConfigSchema = z.object({
       maxDays: z.number().int().min(1).max(3650).default(30),
     })
     .prefault({}),
+  /**
+   * 服务端运行参数（原 AI_REVIEW_* 环境变量，现可在管理后台配置）。
+   * 生效优先级：环境变量 > 此处配置 > 默认值（部署层环境变量仍可覆盖 web 保存的值）。
+   * 属基础设施配置，服务启动时读取一次，保存后需重启服务生效。
+   */
+  server: z
+    .object({
+      /** 允许发起审查的仓库根目录白名单；空数组表示仅当前工作目录（等价 AI_REVIEW_ALLOWED_ROOTS） */
+      allowedRoots: z.array(z.string()).default([]),
+      /** 并行审查任务上限（信号量排队，防压垮 LLM 配额；等价 AI_REVIEW_MAX_CONCURRENT） */
+      maxConcurrent: z.number().int().min(1).max(64).default(3),
+      /** 强制会话 Cookie 携带 Secure（NODE_ENV=production 下自动开启，此处可显式开启；等价 AI_REVIEW_COOKIE_SECURE） */
+      cookieSecure: z.boolean().default(false),
+      /** 放开开放注册（缺省仅在无任何用户时允许；等价 AI_REVIEW_ALLOW_REGISTER） */
+      allowRegister: z.boolean().default(false),
+      /** 反向代理部署时开启：限流/审计改用 X-Forwarded-For 识别真实客户端 IP（等价 AI_REVIEW_TRUST_PROXY） */
+      trustProxy: z.boolean().default(false),
+      /** Ollama 回退模型（云端 provider 不可用时的本地兜底；等价 AI_REVIEW_OLLAMA_MODEL） */
+      ollamaModel: z.string().default('qwen3-coder:30b'),
+    })
+    .prefault({}),
 });
 
 export type AiReviewConfig = z.infer<typeof AiReviewConfigSchema>;

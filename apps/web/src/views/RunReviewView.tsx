@@ -10,8 +10,8 @@ import { useNotify } from '../hooks/use-notify';
 
 type RunFormValues = {
   repoPath: string;
-  mode: 'fast' | 'full';
-  blockOn: 'BLOCKER' | 'WARNING' | 'NIT';
+  mode?: 'fast' | 'full';
+  blockOn?: 'BLOCKER' | 'WARNING' | 'NIT';
 };
 export type RunReviewViewProps = { onCompleted: (reviewId: string) => void };
 
@@ -55,7 +55,6 @@ export function RunReviewView(props: RunReviewViewProps): ReactElement {
         <Form<RunFormValues>
           className="review-form"
           layout="vertical"
-          initialValues={{ mode: 'fast', blockOn: 'BLOCKER' }}
           onFinish={(values) => startMutation.mutate(values)}
         >
           <Form.Item
@@ -67,6 +66,8 @@ export function RunReviewView(props: RunReviewViewProps): ReactElement {
           </Form.Item>
           <Form.Item label="审查模式" name="mode">
             <Select
+              placeholder="使用系统默认"
+              allowClear
               options={[
                 { value: 'fast', label: 'Fast · 快速反馈' },
                 { value: 'full', label: 'Full · 完整分析' },
@@ -75,13 +76,15 @@ export function RunReviewView(props: RunReviewViewProps): ReactElement {
           </Form.Item>
           <Form.Item
             label={
-              <Tooltip title="达到该级别时，审查结果将标记为阻断。">
+              <Tooltip title="达到该级别时，审查结果将标记为阻断；未选择时使用系统配置的默认阈值。">
                 <span>阻断阈值</span>
               </Tooltip>
             }
             name="blockOn"
           >
             <Select
+              placeholder="使用系统默认"
+              allowClear
               options={[
                 { value: 'BLOCKER', label: 'BLOCKER · 严重问题' },
                 { value: 'WARNING', label: 'WARNING · 警告及以上' },

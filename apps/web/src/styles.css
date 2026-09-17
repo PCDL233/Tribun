@@ -866,3 +866,18 @@ select {
 .full-width {
   width: 100%;
 }
+
+/* 系统配置页瀑布流：卡片高度不一，按 CSS columns 交错排列（≥800px 两列，窄屏单列） */
+.config-masonry {
+  columns: 1;
+  column-gap: 16px;
+}
+.config-masonry > .ant-card {
+  break-inside: avoid;
+  margin-bottom: 16px;
+}
+@media (min-width: 800px) {
+  .config-masonry {
+    columns: 2;
+  }
+}

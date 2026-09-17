@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { delimiter, dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -18,6 +18,7 @@ import { createStoreReviewCache } from './cache.js';
 import { Logger } from './logger.js';
 import { createReviewMetrics } from './metrics.js';
 import { ReviewService } from './review-service.js';
+import { loadServerSettings } from './server-settings.js';
 import { createKnowledgeManager } from './knowledge.js';
 
 export type ServerCliOptions = {
@@ -127,6 +128,8 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
   users.backfillDefaultRoles();
   const metrics = createReviewMetrics();
   const reviewCache = createStoreReviewCache(store);
+  // 服务端运行参数（web 可配置，env > config > 默认）：启动时快照，保存后需重启生效
+  const settings = loadServerSettings(config);
   // 配置热重读：管理后台保存配置/自定义规则后，下一次审查自动生效，无需重启服务
   const readLiveConfig = createLiveConfigReader(configPath, config);
   const service = new ReviewService(
@@ -140,6 +143,7 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
     },
     runReviewPipeline,
     metrics,
+    settings.maxConcurrent,
   );
   // 头像目录与 DB 同目录（默认 .ai-review-cache/avatars），由 AvatarStore 自行 mkdir
   const avatarStore = new AvatarStore(join(dirname(options.dbFile), 'avatars'));
@@ -152,11 +156,19 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
     knowledge,
     avatars: avatarStore,
     audit,
-    // 允许审查的仓库根目录（方案 3）：默认当前工作目录；可用 AI_REVIEW_ALLOWED_ROOTS 以路径分隔符扩展
-    allowedRoots:
-      process.env.AI_REVIEW_ALLOWED_ROOTS?.split(delimiter).filter((p) => p !== '') ?? [
-        process.cwd(),
-      ],
+    // 服务端参数（env > config > 默认）：允许审查的仓库根目录、开放注册、Cookie Secure、信任代理
+    // 开放注册仅在显式开启时注入；关闭时保留“首个管理员引导”语义（无用户时仍可注册首账号）
+    allowedRoots: settings.allowedRoots,
+    ...(settings.allowRegister ? { registrationOpen: true } : {}),
+    cookieSecure: settings.cookieSecure,
+    trustProxy: settings.trustProxy,
+    runtime: {
+      port: options.port,
+      dbPath: resolve(options.dbFile),
+      webDistDir: options.webDistDir ?? null,
+      configPath: resolve(configPath),
+      allowedRoots: [...settings.allowedRoots],
+    },
   });
 
   if (options.webDistDir !== undefined && existsSync(options.webDistDir)) {

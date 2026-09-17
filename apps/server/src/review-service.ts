@@ -66,8 +66,10 @@ export class ReviewService {
     private readonly depsFactory: PipelineDepsFactory,
     private readonly runner: PipelineRunner = runReviewPipeline,
     private readonly metrics?: ReviewMetrics,
+    maxConcurrent?: number,
   ) {
-    const configured = Number(process.env.AI_REVIEW_MAX_CONCURRENT ?? 3);
+    // 并发上限：注入的 server 参数 > 环境变量 > 默认 3
+    const configured = maxConcurrent ?? Number(process.env.AI_REVIEW_MAX_CONCURRENT ?? 3);
     this.maxConcurrent = Number.isFinite(configured) && configured > 0 ? configured : 3;
   }
 

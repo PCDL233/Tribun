@@ -108,4 +108,55 @@ describe('loadConfig', () => {
     expect(() => loadConfig(path)).toThrow(ConfigError);
     expect(() => loadConfig(path)).toThrow(/customRules\.0\.flags/);
   });
+
+  it('parses the server section with defaults', () => {
+    const path = join(dir, '.ai-review.yml');
+    writeFileSync(path, 'llm:\n  provider: mock\n');
+    const cfg = loadConfig(path);
+    expect(cfg.server).toEqual({
+      allowedRoots: [],
+      maxConcurrent: 3,
+      cookieSecure: false,
+      allowRegister: false,
+      trustProxy: false,
+      ollamaModel: 'qwen3-coder:30b',
+    });
+  });
+
+  it('parses explicit server settings from yaml', () => {
+    const path = join(dir, '.ai-review.yml');
+    writeFileSync(
+      path,
+      [
+        'llm:',
+        '  provider: mock',
+        'server:',
+        '  allowedRoots:',
+        '    - D:/repos/a',
+        '    - D:/repos/b',
+        '  maxConcurrent: 5',
+        '  cookieSecure: true',
+        '  allowRegister: true',
+        '  trustProxy: true',
+        '  ollamaModel: qwen3-coder:14b',
+        '',
+      ].join('\n'),
+    );
+    const cfg = loadConfig(path);
+    expect(cfg.server).toEqual({
+      allowedRoots: ['D:/repos/a', 'D:/repos/b'],
+      maxConcurrent: 5,
+      cookieSecure: true,
+      allowRegister: true,
+      trustProxy: true,
+      ollamaModel: 'qwen3-coder:14b',
+    });
+  });
+
+  it('rejects invalid server settings (maxConcurrent out of range)', () => {
+    const path = join(dir, '.ai-review.yml');
+    writeFileSync(path, 'server:\n  maxConcurrent: 999\n');
+    expect(() => loadConfig(path)).toThrow(ConfigError);
+    expect(() => loadConfig(path)).toThrow(/server\.maxConcurrent/);
+  });
 });

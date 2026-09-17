@@ -51,8 +51,12 @@ export function generateRandomPassword(): string {
 
 export interface AuthDeps {
   users: UserStore;
-  /** 是否允许开放注册（方案 8）；缺省：已存在用户时关闭，需管理员在后台创建 */
+  /** 是否允许开放注册；缺省：已存在用户时关闭，需管理员在后台创建 */
   registrationOpen?: boolean;
+  /** 会话 Cookie 是否携带 Secure；缺省：生产环境自动开启 */
+  cookieSecure?: boolean;
+  /** 反向代理部署时信任 X-Forwarded-For（限流/审计共用） */
+  trustProxy?: boolean;
   /** 审计日志（登录日志 + 操作日志）；未装配时静默跳过 */
   audit?: AuditService;
 }
@@ -130,8 +134,11 @@ function issueSessionCookie(deps: AuthDeps, c: Context, userId: string): void {
     sameSite: 'Lax',
     path: '/',
     maxAge: SESSION_TTL_MS / 1000,
-    // HTTPS 部署下强制 secure（方案 6）；默认仅在生产环境开启，兼容本地 http 开发
-    secure: process.env.NODE_ENV === 'production' || process.env.AI_REVIEW_COOKIE_SECURE === 'true',
+    // HTTPS 部署下强制 secure；默认仅在生产环境开启，兼容本地 http 开发
+    // （cookieSecure 由服务端参数解析：env > config，保留 NODE_ENV 生产自动开启语义）
+    secure:
+      deps.cookieSecure ??
+      (process.env.NODE_ENV === 'production' || process.env.AI_REVIEW_COOKIE_SECURE === 'true'),
   });
 }
 
@@ -160,6 +167,7 @@ export function registerAuthRoutes(app: Hono<AppEnv>, deps: AuthDeps): void {
     const userAgent = c.req.header('user-agent') ?? '';
     const audit = deps.audit;
     // 开放注册（方案 8）：显式配置优先；缺省为“首个管理员引导后关闭”
+    // 开放注册：显式配置优先；缺省为“首个管理员引导后关闭”（无任何用户时允许注册）
     const openRegistration =
       deps.registrationOpen !== undefined
         ? deps.registrationOpen

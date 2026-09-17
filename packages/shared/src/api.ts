@@ -202,7 +202,20 @@ export const AdminConfigSchema = AiReviewConfigSchema.superRefine((config, ctx) 
     });
   }
 });
-export const AdminConfigResponseSchema = z.object({ config: AiReviewConfigSchema });
+/** 服务端运行环境只读信息（web 配置页展示，不提供编辑：端口/DB 等属启动参数） */
+export const ServerRuntimeSchema = z.object({
+  port: z.number().int(),
+  dbPath: z.string(),
+  webDistDir: z.string().nullable(),
+  configPath: z.string(),
+  allowedRoots: z.array(z.string()),
+});
+export type ServerRuntime = z.infer<typeof ServerRuntimeSchema>;
+
+export const AdminConfigResponseSchema = z.object({
+  config: AiReviewConfigSchema,
+  runtime: ServerRuntimeSchema,
+});
 export type AdminConfig = z.infer<typeof AiReviewConfigSchema>;
 export type AdminConfigResponse = z.infer<typeof AdminConfigResponseSchema>;
 

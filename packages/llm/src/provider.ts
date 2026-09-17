@@ -263,7 +263,7 @@ export function createConfiguredProvider(
       ? undefined
       : createHttpProvider({
           provider: 'ollama',
-          model: process.env.AI_REVIEW_OLLAMA_MODEL ?? 'qwen3-coder:30b',
+          model: process.env.AI_REVIEW_OLLAMA_MODEL ?? config.server.ollamaModel,
           apiKey: 'ollama',
           ...(process.env.AI_REVIEW_OLLAMA_BASE_URL !== undefined &&
           process.env.AI_REVIEW_OLLAMA_BASE_URL !== ''

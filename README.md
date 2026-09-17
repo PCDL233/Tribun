@@ -256,6 +256,10 @@ pnpm exec ai-review server --port 8080 --web-dist apps/web/dist
 
 #### 服务端环境变量
 
+> 以下参数除 `AI_REVIEW_API_KEY` 外均可在管理后台「系统配置 → 服务端」页面配置（写入配置文件的 `server` 段）。
+> 生效优先级：环境变量 > 配置文件 server 段 > 默认值——部署层显式设置的环境变量仍可覆盖 web 保存的值；
+> 服务启动时读取一次，保存后需重启服务生效。
+
 | 变量                         | 默认值       | 说明                                                                                                  |
 | ---------------------------- | ------------ | ----------------------------------------------------------------------------------------------------- |
 | `AI_REVIEW_ALLOWED_ROOTS`    | `cwd`        | 允许发起审查的仓库根目录白名单，多个用路径分隔符分隔（Windows `;` / POSIX `:`）；越界路径一律 400     |
@@ -263,7 +267,8 @@ pnpm exec ai-review server --port 8080 --web-dist apps/web/dist
 | `AI_REVIEW_COOKIE_SECURE`    | 关           | `true` 时强制会话 Cookie 携带 `Secure`（NODE_ENV=production 下自动开启）                               |
 | `AI_REVIEW_ALLOW_REGISTER`   | 关           | `true` 时放开开放注册；缺省仅在无任何用户时允许（首个管理员引导后自动关闭）                            |
 | `AI_REVIEW_TRUST_PROXY`      | 关           | 反向代理（nginx 等）部署时开启：限流改用 `X-Forwarded-For` 末值识别真实客户端 IP，避免全员共享代理 IP 的限流桶 |
-| `AI_REVIEW_API_KEY`          | 无           | 模型 API Key，配合配置文件的 `${AI_REVIEW_API_KEY}` 引用；切勿写入仓库                                 |
+| `AI_REVIEW_OLLAMA_MODEL`     | `qwen3-coder:30b` | Ollama 回退模型（云端 provider 不可用时的本地兜底）                                          |
+| `AI_REVIEW_API_KEY`          | 无           | 模型 API Key，配合配置文件的 `${AI_REVIEW_API_KEY}` 引用；切勿写入仓库（仅可通过环境变量提供）        |
 
 Docker 镜像默认 `NODE_ENV=production`，会话 Cookie 自动启用 `Secure`；若在 http 反向代理后部署，请同时设置 `AI_REVIEW_COOKIE_SECURE=false` 并配合 `AI_REVIEW_TRUST_PROXY=true`。
 
@@ -291,7 +296,8 @@ Docker 镜像默认 `NODE_ENV=production`，会话 Cookie 自动启用 `Secure`�
 
 ## 配置文件（`.ai-review.yml`）
 
-所有字段都可以省略，省略时使用 schema 默认值。`loadConfig` 会递归解析 `${ENV_NAME}`，配置校验失败会给出字段级错误，CLI 使用退出码 `2`。示例：
+所有字段都可以省略，省略时使用 schema 默认值。`loadConfig` 会递归解析 `${ENV_NAME}`，配置校验失败会给出字段级错误，CLI 使用退出码 `2`。
+Web 发起审查时若未显式选择审查模式/阻断阈值，将回退使用 `review.mode`/`review.blockOn` 配置值（`POST /api/reviews` 同理）；重新执行（rerun）沿用原审查发起时的模式与阈值。示例：
 
 ```yaml
 llm:
@@ -341,6 +347,17 @@ customRules:
     filePatterns: ['src/**']
     matchScope: [added]
     enabled: true
+
+# 服务端运行参数（原 AI_REVIEW_* 环境变量，现可在管理后台「服务端」卡片配置）：
+# 生效优先级：环境变量 > 此处配置 > 默认值（部署层环境变量仍可覆盖 web 保存的值）。
+# 属基础设施配置，服务启动时读取一次，保存后需重启服务生效。
+server:
+  allowedRoots: []           # 允许发起审查的仓库根目录白名单；空 = 仅当前工作目录
+  maxConcurrent: 3           # 并行审查任务上限（信号量排队）
+  cookieSecure: false        # 强制会话 Cookie Secure（NODE_ENV=production 下自动开启）
+  allowRegister: false       # 放开开放注册（缺省仅在无任何用户时允许首账号引导）
+  trustProxy: false          # 反向代理部署时信任 X-Forwarded-For 识别真实 IP
+  ollamaModel: qwen3-coder:30b  # Ollama 回退模型（云端不可用时的本地兜底）
 
 report:
   format: markdown # markdown | html | json
@@ -403,7 +420,7 @@ Ollama 的默认模型回退为 `qwen3-coder:30b`，可用 `AI_REVIEW_OLLAMA_MOD
 
 1. **系统概览**：查看用户数、管理员数、审查数、发现数、Token 消耗、缓存摘要和最近失败记录。
 2. **用户管理**：查看用户列表，修改角色/状态，重置密码或删除其他用户。
-3. **配置管理**：读取并保存 `.ai-review.yml`；API Key 在页面中以 `********` 掩码显示，提交掩码值会保留原密钥。
+3. **配置管理**：读取并保存 `.ai-review.yml`；API Key 在页面中以 `********` 掩码显示，提交掩码值会保留原密钥；「服务端」卡片可配置原环境变量参数（仓库白名单/并发上限/安全开关等，保存后重启生效），并只读展示运行环境（端口、DB 路径、前端静态目录）。
 4. **自定义规则**：查看、新增、编辑、删除和启停自定义审查规则，并可粘贴示例 diff / 源码在线试跑验证正则命中。
 5. **知识库管理**：查看索引状态并异步触发 RAG 增量重建。
 6. **登录日志 / 操作日志**：分页查看认证事件与管理/审查写操作审计，支持日期范围、状态、动作与关键词筛选（仅持有对应权限的账号可见）。
@@ -426,7 +443,7 @@ Ollama 的默认模型回退为 `qwen3-coder:30b`，可用 `AI_REVIEW_OLLAMA_MOD
 
 | 路由                                                  | 方法   | 说明                                                 |
 | ----------------------------------------------------- | ------ | ---------------------------------------------------- |
-| `/api/reviews`                                        | POST   | 发起审查，返回 `202 + { reviewId }`                  |
+| `/api/reviews`                                        | POST   | 发起审查，返回 `202 + { reviewId }`；`mode`/`blockOn` 可选，未传时回退系统配置的 `review.mode`/`review.blockOn` |
 | `/api/reviews`                                        | GET    | 审查历史列表；普通用户仅返回本人记录，支持查询和分页 |
 | `/api/reviews/:id`                                    | GET    | 五段式报告详情与行级 findings                        |
 | `/api/reviews/:id/diff`                               | GET    | 获取审查使用的 diff                                  |

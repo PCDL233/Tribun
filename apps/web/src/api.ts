@@ -21,6 +21,7 @@ import type {
   ReviewListItem,
   ReviewReportDetail,
   ReviewStats,
+  ServerRuntime,
 } from '@ai-review/shared/api';
 import { parseResponse } from './parse-response.js';
 
@@ -69,13 +70,17 @@ export async function fetchReviewDetail(reviewId: string): Promise<ReviewReportD
 
 export async function startReview(
   repoPath: string,
-  mode: 'fast' | 'full',
+  mode?: 'fast' | 'full',
   blockOn?: 'BLOCKER' | 'WARNING' | 'NIT',
 ): Promise<string> {
   const response = await fetch(`${API_BASE}/reviews`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ repoPath, mode, ...(blockOn !== undefined ? { blockOn } : {}) }),
+    body: JSON.stringify({
+      repoPath,
+      ...(mode !== undefined ? { mode } : {}),
+      ...(blockOn !== undefined ? { blockOn } : {}),
+    }),
   });
   const body = await parseResponse(StartReviewResponseSchema, response);
   return body.reviewId;
@@ -147,6 +152,15 @@ export async function fetchAdminConfig(): Promise<AdminConfig> {
     await fetch(`${API_BASE}/admin/config`),
   );
   return body.config;
+}
+
+/** 服务端运行环境只读信息（端口/DB 路径/静态目录/白名单生效值），供配置页展示 */
+export async function fetchServerRuntime(): Promise<ServerRuntime> {
+  const body = await parseResponse(
+    AdminConfigResponseSchema,
+    await fetch(`${API_BASE}/admin/config`),
+  );
+  return body.runtime;
 }
 
 export async function updateAdminConfig(config: AdminConfig): Promise<AdminConfig> {

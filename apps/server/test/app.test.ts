@@ -1,7 +1,8 @@
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { stringify as stringifyYaml } from 'yaml';
 import { runReviewPipeline } from '@ai-review/core';
 import type { GitRunner, PipelineDeps, PipelineRunner, ReviewState } from '@ai-review/core';
 import { openSqlite, LogStore, ReviewStore, UserStore } from '@ai-review/db';
@@ -798,6 +799,164 @@ describe('admin privilege isolation', () => {
       body: JSON.stringify({ llm: { provider: 'not-a-provider' } }),
     });
     expect(response.status).toBe(400);
+  });
+
+  it('persists server settings and review fields, and reports read-only runtime', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-review-srvcfg-'));
+    const configPath = join(dir, '.ai-review.yml');
+    const app = makeHarness(async () => makeState(), undefined, configPath);
+    const admin = await registerUser(app, 'boss');
+
+    const response = await app.request('/api/admin/config', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...auth(admin.cookie) },
+      body: JSON.stringify({
+        llm: { provider: 'mock' },
+        review: {
+          mode: 'fast',
+          dimensions: ['correctness', 'security'],
+          ignorePatterns: ['*.lock', 'custom-pattern/**'],
+          blockOn: 'BLOCKER',
+        },
+        server: {
+          allowedRoots: ['D:/repos/a'],
+          maxConcurrent: 4,
+          cookieSecure: true,
+          allowRegister: true,
+          trustProxy: true,
+          ollamaModel: 'qwen3-coder:14b',
+        },
+      }),
+    });
+    expect(response.status).toBe(200);
+    const saved = (await response.json()) as {
+      config: {
+        review: { dimensions: string[]; ignorePatterns: string[] };
+        server: { maxConcurrent: number; allowRegister: boolean };
+      };
+    };
+    expect(saved.config.review.dimensions).toEqual(['correctness', 'security']);
+    expect(saved.config.review.ignorePatterns).toEqual(['*.lock', 'custom-pattern/**']);
+    expect(saved.config.server.maxConcurrent).toBe(4);
+    expect(saved.config.server.allowRegister).toBe(true);
+
+    // 回读：GET 返回持久化的 server 段与只读 runtime（含默认端口/DB 路径兜底）
+    const getRes = await app.request('/api/admin/config', { headers: auth(admin.cookie) });
+    expect(getRes.status).toBe(200);
+    const body = (await getRes.json()) as {
+      config: {
+        review: { dimensions: string[] };
+        server: { maxConcurrent: number; ollamaModel: string };
+      };
+      runtime: { port: number; dbPath: string; webDistDir: string | null; configPath: string; allowedRoots: string[] };
+    };
+    expect(body.config.server.maxConcurrent).toBe(4);
+    expect(body.config.server.ollamaModel).toBe('qwen3-coder:14b');
+    expect(body.config.review.dimensions).toEqual(['correctness', 'security']);
+    expect(body.runtime.configPath).toBe(configPath);
+    expect(body.runtime.port).toBe(8080);
+    expect(body.runtime.webDistDir).toBeNull();
+  });
+
+  it('applies configured review mode/blockOn as defaults for web reviews', async () => {
+    // WARNING 发现（无 BLOCKER）：配置 blockOn=WARNING 时判定为阻断
+    const warningState = (): ReviewState => {
+      const state = makeState();
+      state.findings = [
+        {
+          agent: 'static',
+          severity: 'WARNING',
+          confidence: 0.8,
+          filePath: 'a.ts',
+          lineStart: 1,
+          lineEnd: 1,
+          title: 'unused variable',
+          description: 'desc',
+          isFalsePositive: false,
+        },
+      ];
+      return state;
+    };
+    const dir = mkdtempSync(join(tmpdir(), 'ai-review-modecfg-'));
+    const configPath = join(dir, '.ai-review.yml');
+    writeFileSync(
+      configPath,
+      stringifyYaml({ llm: { provider: 'mock' }, review: { mode: 'full', blockOn: 'WARNING' } }),
+      'utf8',
+    );
+    const app = makeHarness(async () => warningState(), undefined, configPath);
+    const { cookie } = await registerUser(app, 'boss');
+
+    // 未传 mode/blockOn → 回退系统配置默认值（full + WARNING）
+    const started = await app.request('/api/reviews', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ repoPath: 'D:/tmp/repo' }),
+    });
+    expect(started.status).toBe(202);
+    const { reviewId }: { reviewId: string } = await started.json();
+
+    await vi.waitFor(async () => {
+      const detail = await app.request(`/api/reviews/${reviewId}`, { headers: auth(cookie) });
+      expect(detail.status).toBe(200);
+      const review = (await detail.json()) as { meta: { mode: string } };
+      expect(review.meta.mode).toBe('full');
+    });
+    // blockOn 回退：WARNING 发现 + 配置 WARNING → completed blocking=true
+    const body = await (
+      await app.request(`/api/reviews/${reviewId}/events`, { headers: auth(cookie) })
+    ).text();
+    expect(body).toContain('event: completed');
+    expect(body).toContain('"blocking":true');
+  });
+
+  it('explicit mode/blockOn override the configured defaults', async () => {
+    const warningState = (): ReviewState => {
+      const state = makeState();
+      state.findings = [
+        {
+          agent: 'static',
+          severity: 'WARNING',
+          confidence: 0.8,
+          filePath: 'a.ts',
+          lineStart: 1,
+          lineEnd: 1,
+          title: 'unused variable',
+          description: 'desc',
+          isFalsePositive: false,
+        },
+      ];
+      return state;
+    };
+    const dir = mkdtempSync(join(tmpdir(), 'ai-review-modecfg-'));
+    const configPath = join(dir, '.ai-review.yml');
+    writeFileSync(
+      configPath,
+      stringifyYaml({ llm: { provider: 'mock' }, review: { mode: 'full', blockOn: 'WARNING' } }),
+      'utf8',
+    );
+    const app = makeHarness(async () => warningState(), undefined, configPath);
+    const { cookie } = await registerUser(app, 'boss');
+
+    const started = await app.request('/api/reviews', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ repoPath: 'D:/tmp/repo', mode: 'fast', blockOn: 'BLOCKER' }),
+    });
+    expect(started.status).toBe(202);
+    const { reviewId }: { reviewId: string } = await started.json();
+
+    await vi.waitFor(async () => {
+      const detail = await app.request(`/api/reviews/${reviewId}`, { headers: auth(cookie) });
+      expect(detail.status).toBe(200);
+      const review = (await detail.json()) as { meta: { mode: string } };
+      expect(review.meta.mode).toBe('fast');
+    });
+    // 显式 BLOCKER 覆盖配置 WARNING：仅 WARNING 发现 → blocking=false
+    const body = await (
+      await app.request(`/api/reviews/${reviewId}/events`, { headers: auth(cookie) })
+    ).text();
+    expect(body).toContain('"blocking":false');
   });
 
   it('serves the admin overview aggregation', async () => {

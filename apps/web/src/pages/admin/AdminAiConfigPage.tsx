@@ -73,8 +73,11 @@ export function AdminAiConfigPage(): ReactElement {
     }
   };
 
-  const submit = (values: AdminConfig): void => {
+  const submit = (): void => {
     setSaved(false);
+    // 全量提交：取表单 store 的全部值（含未渲染 Form.Item 的其他配置段），
+    // 避免只提交本页注册字段时把审查/日志/服务端等其余配置段重置为默认值
+    const values = form.getFieldsValue(true) as AdminConfig;
     const parsed = AdminConfigSchema.safeParse(values);
     if (!parsed.success) {
       const fields: Parameters<typeof form.setFields>[0] = parsed.error.issues.map((issue) => ({
