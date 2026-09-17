@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
-import { and, desc, eq, gte, like, lte, or } from 'drizzle-orm';
+import { and, count, desc, eq, gte, like, lte, or, sum } from 'drizzle-orm';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { z } from 'zod';
@@ -67,6 +67,7 @@ export class ReviewStore {
         author          TEXT,
         model           TEXT NOT NULL,
         mode            TEXT NOT NULL,
+        block_on        TEXT,
         status          TEXT NOT NULL DEFAULT 'completed',
         risk_score      REAL NOT NULL,
         total_findings  INTEGER NOT NULL DEFAULT 0,
@@ -107,11 +108,12 @@ export class ReviewStore {
         created_at     TEXT NOT NULL
       );
     `);
-    // 存量库升级：reviews 补 created_by / diff_text / error_message 列（新建库由上方建表语句直接包含，ALTER 必然重复报错）
+    // 存量库升级：reviews 补 created_by / diff_text / error_message / block_on 列（新建库由上方建表语句直接包含，ALTER 必然重复报错）
     for (const ddl of [
       'ALTER TABLE reviews ADD COLUMN created_by TEXT',
       'ALTER TABLE reviews ADD COLUMN diff_text TEXT',
       'ALTER TABLE reviews ADD COLUMN error_message TEXT',
+      'ALTER TABLE reviews ADD COLUMN block_on TEXT',
     ]) {
       try {
         sqlite.exec(ddl);
@@ -173,7 +175,12 @@ export class ReviewStore {
   public saveReport(
     report: ReviewReport,
     createdBy?: string,
-    options: { diffText?: string | null; errorMessage?: string | null } = {},
+    options: {
+      diffText?: string | null;
+      errorMessage?: string | null;
+      /** 发起时配置的阻断阈值（BLOCKER/WARNING/NIT）；持久化供 SSE 晚连接重放按原阈值重算 blocking */
+      blockOn?: 'BLOCKER' | 'WARNING' | 'NIT';
+    } = {},
   ): string {
     const reviewId = report.meta.reviewId;
     const count = (severity: string): number =>
@@ -190,6 +197,7 @@ export class ReviewStore {
           author: report.meta.author,
           model: report.meta.model,
           mode: report.meta.mode,
+          blockOn: options.blockOn ?? null,
           status: report.meta.status ?? 'completed',
           riskScore: report.meta.riskScore,
           totalFindings: report.findings.length,
@@ -300,7 +308,9 @@ export class ReviewStore {
       query.severity === 'NIT' ? gte(reviews.nitCount, 1) : undefined,
     ];
     const where = and(...filters);
-    const totalRow = this.db.select({ id: reviews.id }).from(reviews).where(where).all();
+    // 方案 9：总数用 SQL COUNT 聚合，避免把全部匹配行读进内存仅为了计数
+    const totalRow = this.db.select({ value: count() }).from(reviews).where(where).get();
+    const total = totalRow?.value ?? 0;
     const rows = this.db
       .select()
       .from(reviews)
@@ -328,25 +338,76 @@ export class ReviewStore {
         createdAt: row.createdAt,
         createdBy: row.createdBy,
       })),
-      total: totalRow.length,
+      total,
       page: query.page,
       pageSize: query.pageSize,
     };
   }
 
-  /** 读取审查输入，供服务端重跑时复用原始仓库与模式。 */
-  public getReviewInput(reviewId: string): {
-    repoPath: string;
-    mode: 'fast' | 'full';
-    createdBy: string | null;
-  } {
+  /**
+   * 读取报告状态（方案 14：SSE 晚连接兜底仅需状态，避免解析完整报告与 findings）。
+   * @returns 报告不存在返回 undefined
+   */
+  public getReportStatus(
+    reviewId: string,
+  ): {
+    status: 'completed' | 'failed' | 'cancelled';
+    errorMessage: string | null;
+    riskScore: number;
+    blockerCount: number;
+    warningCount: number;
+    nitCount: number;
+    blockOn: 'BLOCKER' | 'WARNING' | 'NIT' | null;
+  } | undefined {
     const row = this.db
-      .select({ repoPath: reviews.repoPath, mode: reviews.mode, createdBy: reviews.createdBy })
+      .select({
+        status: reviews.status,
+        errorMessage: reviews.errorMessage,
+        riskScore: reviews.riskScore,
+        blockerCount: reviews.blockerCount,
+        warningCount: reviews.warningCount,
+        nitCount: reviews.nitCount,
+        blockOn: reviews.blockOn,
+      })
       .from(reviews)
       .where(eq(reviews.id, reviewId))
       .get();
-    if (row === undefined) throw new StoreError(`review not found: ${reviewId}`);
-    return { repoPath: row.repoPath, mode: row.mode, createdBy: row.createdBy };
+    if (row === undefined) return undefined;
+    return {
+      status: row.status,
+      errorMessage: row.errorMessage,
+      riskScore: row.riskScore,
+      blockerCount: row.blockerCount,
+      warningCount: row.warningCount,
+      nitCount: row.nitCount,
+      blockOn: row.blockOn,
+    };
+  }
+
+  /** 读取审查输入，供服务端重跑时复用原始仓库、模式与阻断阈值。 */
+  public getReviewInput(reviewId: string): {
+    repoPath: string;
+    mode: 'fast' | 'full';
+    blockOn: 'BLOCKER' | 'WARNING' | 'NIT' | null;
+    createdBy: string | null;
+  } {
+    const row = this.db
+      .select({
+        repoPath: reviews.repoPath,
+        mode: reviews.mode,
+        blockOn: reviews.blockOn,
+        createdBy: reviews.createdBy,
+      })
+      .from(reviews)
+      .where(eq(reviews.id, reviewId))
+      .get();
+    if (row === undefined) throw new StoreError(`审查记录不存在`);
+    return {
+      repoPath: row.repoPath,
+      mode: row.mode,
+      blockOn: row.blockOn,
+      createdBy: row.createdBy,
+    };
   }
 
   /** 读取原始 diff；旧记录没有持久化 diff 时返回 null。 */
@@ -356,7 +417,7 @@ export class ReviewStore {
       .from(reviews)
       .where(eq(reviews.id, reviewId))
       .get();
-    if (row === undefined) throw new StoreError(`review not found: ${reviewId}`);
+    if (row === undefined) throw new StoreError(`审查记录不存在`);
     return row.diffText;
   }
 
@@ -377,17 +438,17 @@ export class ReviewStore {
    */
   public getReportDetail(reviewId: string): ReviewReportDetail {
     const row = this.db.select().from(reviews).where(eq(reviews.id, reviewId)).get();
-    if (row === undefined) throw new StoreError(`review not found: ${reviewId}`);
+    if (row === undefined) throw new StoreError(`审查记录不存在`);
 
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(row.reportJson);
     } catch (e) {
-      throw new StoreError(`corrupt report_json for review ${reviewId}`, { cause: e });
+      throw new StoreError(`报告数据损坏，请删除该审查后重试`, { cause: e });
     }
     const stored = StoredReportSchema.safeParse(parsedJson);
     if (!stored.success) {
-      throw new StoreError(`corrupt report_json for review ${reviewId}`, {
+      throw new StoreError(`报告数据损坏，请删除该审查后重试`, {
         cause: stored.error,
       });
     }
@@ -528,11 +589,12 @@ export class ReviewStore {
 
   /** 缓存表规模与累计节省 token（成本观测，方案 §七 成本估算的落地数据） */
   public getCacheSummary(): { entries: number; tokenSaved: number } {
-    const rows = this.db.select({ tokenSaved: reviewCache.tokenSaved }).from(reviewCache).all();
-    return {
-      entries: rows.length,
-      tokenSaved: rows.reduce((sum, row) => sum + row.tokenSaved, 0),
-    };
+    // 方案 10：COUNT + SUM 一次 SQL 聚合，避免全表读入 JS 累加
+    const row = this.db
+      .select({ entries: count(), tokenSaved: sum(reviewCache.tokenSaved) })
+      .from(reviewCache)
+      .get();
+    return { entries: Number(row?.entries ?? 0), tokenSaved: Number(row?.tokenSaved ?? 0) };
   }
 
   /**

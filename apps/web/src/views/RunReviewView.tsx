@@ -4,9 +4,9 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { Alert, Button, Card, Form, Input, Select, Space, Steps, Tag, Tooltip, Typography } from 'antd';
 import { STAGE_GROUPS, useReviewEvents } from '../hooks/use-review-events';
 import type { CompletedResult } from '../hooks/use-review-events';
-import { describeError } from '../parse-response';
 import { cancelReview, startReview } from '../api';
 import { CardHeading, PageHeader } from '../components/PageHeader';
+import { useNotify } from '../hooks/use-notify';
 
 type RunFormValues = {
   repoPath: string;
@@ -18,13 +18,16 @@ export type RunReviewViewProps = { onCompleted: (reviewId: string) => void };
 export function RunReviewView(props: RunReviewViewProps): ReactElement {
   const [runningId, setRunningId] = useState<string | undefined>(undefined);
   const queryClient = useQueryClient();
+  const { notifyError } = useNotify();
   const startMutation = useMutation({
     mutationFn: (values: RunFormValues) =>
       startReview(values.repoPath, values.mode, values.blockOn),
     onSuccess: setRunningId,
+    onError: (e) => notifyError(e, { title: '发起审查失败' }),
   });
   const cancelMutation = useMutation({
     mutationFn: () => cancelReview(runningId ?? ''),
+    onError: (e) => notifyError(e, { title: '取消审查失败' }),
   });
   const handleFinish = (failed: boolean): void => {
     if (!failed) {
@@ -93,14 +96,6 @@ export function RunReviewView(props: RunReviewViewProps): ReactElement {
           </Form.Item>
         </Form>
       </Card>
-      {startMutation.isError ? (
-        <Alert
-          type="error"
-          showIcon
-          message="发起失败"
-          description={describeError(startMutation.error)}
-        />
-      ) : null}
       {runningId !== undefined ? (
         <Card
           className="surface-card"
@@ -152,15 +147,6 @@ export function RunReviewView(props: RunReviewViewProps): ReactElement {
               >
                 取消审查
               </Button>
-            ) : null}
-            {cancelMutation.isError ? (
-              <Alert
-                style={{ marginTop: 16 }}
-                type="error"
-                showIcon
-                message="取消请求失败"
-                description={describeError(cancelMutation.error)}
-              />
             ) : null}
             {progress.failed || progress.cancelled ? (
               <Alert

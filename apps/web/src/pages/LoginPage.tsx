@@ -1,10 +1,10 @@
 import { useEffect } from 'react';
 import type { ReactElement } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Alert, Button, Card, Form, Input, Typography } from 'antd';
+import { Button, Card, Form, Input, Typography } from 'antd';
 import type { LoginInput } from '@ai-review/shared/api';
-import { describeError } from '../parse-response';
 import { useAuth, useLogin } from '../hooks/use-auth';
+import { useNotify } from '../hooks/use-notify';
 import { BrandMark } from '../components/Brand';
 
 export type LoginPageProps = { redirect?: string };
@@ -17,14 +17,19 @@ export function LoginPage(props: LoginPageProps): ReactElement {
   const { user } = useAuth();
   const navigate = useNavigate();
   const loginMutation = useLogin();
+  const { notifyError } = useNotify();
 
   useEffect(() => {
     if (user !== null) void navigate({ to: '/', replace: true });
   }, [user, navigate]);
 
   const handleFinish = async (values: LoginInput): Promise<void> => {
-    await loginMutation.mutateAsync(values);
-    await navigate({ to: safeRedirectTarget(props.redirect), replace: true });
+    try {
+      await loginMutation.mutateAsync(values);
+      await navigate({ to: safeRedirectTarget(props.redirect), replace: true });
+    } catch (e) {
+      notifyError(e, { title: '登录失败' });
+    }
   };
 
   return (
@@ -57,15 +62,6 @@ export function LoginPage(props: LoginPageProps): ReactElement {
           <Typography.Paragraph className="auth-form-subtitle">
             登录你的 ReviewFlow 工作区，继续查看团队代码质量。
           </Typography.Paragraph>
-          {loginMutation.isError ? (
-            <Alert
-              type="error"
-              showIcon
-              message="登录失败"
-              description={describeError(loginMutation.error)}
-              style={{ marginBottom: 22 }}
-            />
-          ) : null}
           <Form<LoginInput> layout="vertical" onFinish={(values) => void handleFinish(values)}>
             <Form.Item
               label="用户名"

@@ -22,7 +22,6 @@ import type { Severity } from '@ai-review/shared';
 import type { IdentifiedFinding, ReviewReportDetail } from '@ai-review/shared/api';
 import { FalsePositiveSwitch } from '../components/FalsePositiveSwitch';
 import { DiffViewer } from '../components/DiffViewer';
-import { describeError } from '../parse-response';
 import {
   deleteReview,
   fetchReviewDetail,
@@ -31,6 +30,8 @@ import {
   reviewExportUrl,
 } from '../api';
 import { CardHeading, PageHeader } from '../components/PageHeader';
+import { ErrorAlert } from '../components/ErrorAlert';
+import { useNotify } from '../hooks/use-notify';
 
 const SEVERITY_COLORS: Record<Severity, string> = {
   BLOCKER: 'red',
@@ -117,6 +118,7 @@ function buildFindingColumns(reviewId: string): ColumnsType<IdentifiedFinding> {
 
 export function ReportDetailView(props: { reviewId: string; onBack: () => void }): ReactElement {
   const { message } = App.useApp();
+  const { notifyError } = useNotify();
   const queryClient = useQueryClient();
   const detailQuery = useQuery({
     queryKey: ['review', props.reviewId],
@@ -133,7 +135,7 @@ export function ReportDetailView(props: { reviewId: string; onBack: () => void }
       void queryClient.invalidateQueries({ queryKey: ['reviews'] });
       props.onBack();
     },
-    onError: (error) => message.error(`重跑失败：${describeError(error)}`),
+    onError: (error) => notifyError(error, { title: '重跑失败' }),
   });
   const deleteMutation = useMutation({
     mutationFn: () => deleteReview(props.reviewId),
@@ -142,7 +144,7 @@ export function ReportDetailView(props: { reviewId: string; onBack: () => void }
       void queryClient.invalidateQueries({ queryKey: ['reviews'] });
       props.onBack();
     },
-    onError: (error) => message.error(`删除失败：${describeError(error)}`),
+    onError: (error) => notifyError(error, { title: '删除失败' }),
   });
 
   if (detailQuery.isPending)
@@ -153,11 +155,10 @@ export function ReportDetailView(props: { reviewId: string; onBack: () => void }
     );
   if (detailQuery.isError) {
     return (
-      <Alert
-        type="error"
-        showIcon
-        message="报告加载失败"
-        description={describeError(detailQuery.error)}
+      <ErrorAlert
+        error={detailQuery.error}
+        title="报告加载失败"
+        onRetry={() => void detailQuery.refetch()}
       />
     );
   }
@@ -304,11 +305,10 @@ export function ReportDetailView(props: { reviewId: string; onBack: () => void }
             key: 'diff',
             label: `Diff 视图${diffQuery.isPending ? '' : ''}`,
             children: diffQuery.isError ? (
-              <Alert
-                type="error"
-                showIcon
-                message="Diff 加载失败"
-                description={describeError(diffQuery.error)}
+              <ErrorAlert
+                error={diffQuery.error}
+                title="Diff 加载失败"
+                onRetry={() => void diffQuery.refetch()}
               />
             ) : diffQuery.isPending ? (
               <Card className="surface-card">

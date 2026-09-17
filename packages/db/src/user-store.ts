@@ -1,6 +1,6 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import Database from 'better-sqlite3';
-import { asc, eq, inArray, lt } from 'drizzle-orm';
+import { asc, count, eq, inArray, lt } from 'drizzle-orm';
 import type { BetterSQLite3Database } from 'drizzle-orm/better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
 import type { Role, User } from '@ai-review/shared';
@@ -35,7 +35,7 @@ export class UserStore {
   }): SafeUser {
     const existing = this.getByUsername(input.username);
     if (existing !== undefined) {
-      throw new StoreError(`username already taken: ${input.username}`);
+      throw new StoreError(`用户名已存在`);
     }
     const isFirstUser = this.countUsers() === 0;
     const row = {
@@ -78,7 +78,9 @@ export class UserStore {
   /** 用户列表（后台管理页，按注册时间正序：首任管理员排在最前） */
   public listUsers(): SafeUser[] {
     const rows = this.db.select().from(users).orderBy(asc(users.createdAt)).all();
-    return rows.map((row) => this.toSafeUser(row));
+    // 方案 10：批量加载全部用户的角色权限，消除每用户 N+1 查询
+    const accessMap = this.getAccessMap(rows.map((row) => row.id));
+    return rows.map((row) => this.toSafeUser(row, accessMap.get(row.id)));
   }
 
   /** @returns 目标用户是否存在 */
@@ -126,16 +128,19 @@ export class UserStore {
   }
 
   public countUsers(): number {
-    return this.db.select({ id: users.id }).from(users).all().length;
+    const row = this.db.select({ value: count() }).from(users).get();
+    return row?.value ?? 0;
   }
 
-  /** 后台概览用：总数与 admin 数一次查全 */
+  /** 后台概览用：总数与 admin 数用 SQL 聚合，避免全表读入 JS */
   public getUserRoleCounts(): { total: number; admins: number } {
-    const rows = this.db.select({ role: users.role }).from(users).all();
-    return {
-      total: rows.length,
-      admins: rows.filter((row) => row.role === 'admin').length,
-    };
+    const totalRow = this.db.select({ value: count() }).from(users).get();
+    const adminRow = this.db
+      .select({ value: count() })
+      .from(users)
+      .where(eq(users.role, 'admin'))
+      .get();
+    return { total: totalRow?.value ?? 0, admins: adminRow?.value ?? 0 };
   }
 
   /**
@@ -182,19 +187,66 @@ export class UserStore {
     this.db.delete(sessions).where(lt(sessions.expiresAt, new Date().toISOString())).run();
   }
 
-  private toSafeUser(row: typeof users.$inferSelect): SafeUser {
-    const access = this.getUserAccess(row.id);
+  private toSafeUser(
+    row: typeof users.$inferSelect,
+    access?: { roleIds: string[]; permissions: string[] },
+  ): SafeUser {
+    const resolved = access ?? this.getUserAccess(row.id);
     return {
       id: row.id,
       username: row.username,
       role: row.role,
       status: row.status,
       avatarUrl: row.avatarUrl ?? null,
-      roleIds: access.roleIds,
-      permissions: access.permissions,
+      roleIds: resolved.roleIds,
+      permissions: resolved.permissions,
       createdAt: row.createdAt,
       lastLoginAt: row.lastLoginAt,
     };
+  }
+
+  /**
+   * 批量加载多用户的角色 id 与权限并集（方案 10：仅 2 次 SQL 覆盖全部用户，消除逐用户 N+1）。
+   * 逻辑与 getUserAccess 单用户版保持一致。
+   */
+  private getAccessMap(
+    userIds: readonly string[],
+  ): Map<string, { roleIds: string[]; permissions: string[] }> {
+    const map = new Map<string, { roleIds: string[]; permissions: string[] }>();
+    if (userIds.length === 0) return map;
+
+    const roleRows = this.db
+      .select({ userId: userRoles.userId, roleId: userRoles.roleId })
+      .from(userRoles)
+      .where(inArray(userRoles.userId, [...userIds]))
+      .all();
+    const roleIdSet = [...new Set(roleRows.map((r) => r.roleId))];
+    const rolesById = new Map<string, string[]>();
+    if (roleIdSet.length > 0) {
+      const roleDefs = this.db
+        .select({ id: roles.id, permissions: roles.permissions })
+        .from(roles)
+        .where(inArray(roles.id, roleIdSet))
+        .all();
+      for (const r of roleDefs) rolesById.set(r.id, JSON.parse(r.permissions) as string[]);
+    }
+
+    for (const userId of userIds) {
+      const ids = roleRows.filter((r) => r.userId === userId).map((r) => r.roleId);
+      const permissionSet = new Set<string>();
+      let hasWildcard = false;
+      for (const roleId of ids) {
+        for (const perm of rolesById.get(roleId) ?? []) {
+          if (perm === '*') hasWildcard = true;
+          permissionSet.add(perm);
+        }
+      }
+      map.set(userId, {
+        roleIds: ids,
+        permissions: hasWildcard ? ['*'] : [...permissionSet],
+      });
+    }
+    return map;
   }
 
   /** 取用户角色 id 与权限并集（RBAC） */
@@ -293,7 +345,7 @@ export class UserStore {
     permissions: string[];
   }): Role {
     const existing = this.db.select().from(roles).where(eq(roles.name, input.name)).get();
-    if (existing !== undefined) throw new StoreError(`role name already taken: ${input.name}`);
+    if (existing !== undefined) throw new StoreError(`角色名已存在`);
     const row = {
       id: randomUUID(),
       name: input.name,
@@ -304,7 +356,7 @@ export class UserStore {
     };
     this.db.insert(roles).values(row).run();
     const created = this.getRole(row.id);
-    if (created === undefined) throw new StoreError('role create failed');
+    if (created === undefined) throw new StoreError('角色创建失败');
     return created;
   }
 
@@ -321,7 +373,7 @@ export class UserStore {
     if (existing === undefined) return undefined;
     const dup = this.db.select().from(roles).where(eq(roles.name, input.name)).get();
     if (dup !== undefined && dup.id !== roleId) {
-      throw new StoreError(`role name already taken: ${input.name}`);
+      throw new StoreError(`角色名已存在`);
     }
     this.db
       .update(roles)
@@ -340,7 +392,7 @@ export class UserStore {
   public deleteRole(roleId: string): boolean {
     const existing = this.getRole(roleId);
     if (existing === undefined) return false;
-    if (existing.isSystem) throw new StoreError('cannot delete system role');
+    if (existing.isSystem) throw new StoreError('不能删除内置角色');
     this.db.delete(userRoles).where(eq(userRoles.roleId, roleId)).run();
     const result = this.db.delete(roles).where(eq(roles.id, roleId)).run();
     return result.changes > 0;

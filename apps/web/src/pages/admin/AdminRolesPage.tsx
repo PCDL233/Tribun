@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
 import { useState } from 'react';
 import {
-  Alert,
   App as AntdApp,
   Button,
   Card,
@@ -21,16 +20,16 @@ import { PlusOutlined, SafetyCertificateOutlined } from '@ant-design/icons';
 import type { ColumnsType } from 'antd/es/table';
 import type { Role, RoleInput } from '@ai-review/shared/api';
 import { createRole, deleteRole, fetchRoles, updateRole } from '../../api/admin';
-import { describeError } from '../../parse-response';
 import { CardHeading } from '../../components/PageHeader';
+import { useNotify } from '../../hooks/use-notify';
 import { ALL_ROUTE_PERMISSIONS } from '../../permissions';
 
 type RoleFormValues = RoleInput;
 
 export function AdminRolesPage(): ReactElement {
   const { message } = AntdApp.useApp();
+  const { notifyError } = useNotify();
   const queryClient = useQueryClient();
-  const [error, setError] = useState<unknown>(null);
   const [editing, setEditing] = useState<Role | null>(null);
   const [open, setOpen] = useState(false);
   const [form] = Form.useForm<RoleFormValues>();
@@ -54,7 +53,7 @@ export function AdminRolesPage(): ReactElement {
       setEditing(null);
       invalidate();
     },
-    onError: (e) => setError(e),
+    onError: (e) => notifyError(e, { title: '保存角色失败' }),
   });
 
   const deleteMutation = useMutation({
@@ -63,7 +62,7 @@ export function AdminRolesPage(): ReactElement {
       void message.success('角色已删除');
       invalidate();
     },
-    onError: (e) => setError(e),
+    onError: (e) => notifyError(e, { title: '删除角色失败' }),
   });
 
   const openCreate = (): void => {
@@ -143,17 +142,6 @@ export function AdminRolesPage(): ReactElement {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      {error !== null ? (
-        <Alert
-          type="error"
-          showIcon
-          message="操作失败"
-          description={describeError(error)}
-          closable
-          onClose={() => setError(null)}
-        />
-      ) : null}
-
       <Card className="surface-card data-table-card">
         <div className="table-toolbar">
           <Typography.Text type="secondary">

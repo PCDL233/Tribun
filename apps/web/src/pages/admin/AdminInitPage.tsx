@@ -1,14 +1,15 @@
 import { useState } from 'react';
 import type { ReactElement } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import { Alert, Button, Card, Result, Typography } from 'antd';
+import { Button, Card, Result, Typography } from 'antd';
 import { CheckCircleOutlined, FileTextOutlined } from '@ant-design/icons';
 import { initializeConfig } from '../../api';
-import { describeError } from '../../parse-response';
 import { CardHeading, PageHeader } from '../../components/PageHeader';
+import { useNotify } from '../../hooks/use-notify';
 
 export function AdminInitPage(): ReactElement {
   const queryClient = useQueryClient();
+  const { notifyError } = useNotify();
   const [created, setCreated] = useState(false);
   const initMutation = useMutation({
     mutationFn: initializeConfig,
@@ -16,6 +17,7 @@ export function AdminInitPage(): ReactElement {
       setCreated(true);
       void queryClient.invalidateQueries({ queryKey: ['admin-config'] });
     },
+    onError: (e) => notifyError(e, { title: '生成配置失败' }),
   });
 
   return (
@@ -48,15 +50,6 @@ export function AdminInitPage(): ReactElement {
             <li>静态分析工具与复杂度阈值</li>
             <li>RAG 知识库路径与报告输出策略</li>
           </ul>
-          {initMutation.isError && (
-            <Alert
-              style={{ marginBottom: 16 }}
-              type="error"
-              showIcon
-              message="初始化失败"
-              description={describeError(initMutation.error)}
-            />
-          )}
           <Button
             type="primary"
             icon={<FileTextOutlined />}

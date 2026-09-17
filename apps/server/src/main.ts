@@ -1,5 +1,5 @@
 import { existsSync, readFileSync } from 'node:fs';
-import { dirname, join, resolve } from 'node:path';
+import { delimiter, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
@@ -104,6 +104,11 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
     configPath,
     knowledge,
     avatars: avatarStore,
+    // 允许审查的仓库根目录（方案 3）：默认当前工作目录；可用 AI_REVIEW_ALLOWED_ROOTS 以路径分隔符扩展
+    allowedRoots:
+      process.env.AI_REVIEW_ALLOWED_ROOTS?.split(delimiter).filter((p) => p !== '') ?? [
+        process.cwd(),
+      ],
   });
 
   if (options.webDistDir !== undefined && existsSync(options.webDistDir)) {

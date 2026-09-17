@@ -2,16 +2,24 @@ import { useState } from 'react';
 import type { ReactElement } from 'react';
 import { useNavigate } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
-import { Alert, App as AntdApp, Button, Card, Form, Input, Tag, Typography, Upload } from 'antd';
+import { Alert, Button, Card, Form, Input, Tag, Typography, Upload } from 'antd';
 import type { UploadFile } from 'antd';
 import { AUTH_QUERY_KEY, useAuth, useChangePassword, useUploadAvatar } from '../hooks/use-auth';
-import { describeError } from '../parse-response';
+import { useNotify } from '../hooks/use-notify';
+import { getErrorStatus } from '../parse-response';
 import { CardHeading, PageHeader } from '../components/PageHeader';
 import { UserAvatar } from '../components/UserAvatar';
 
 /** 头像上传的常规限制（与服务端一致）：位图格式，≤2MB */
 const AVATAR_ACCEPT = 'image/jpeg,image/png,image/webp,image/gif';
 const AVATAR_MAX_BYTES = 2 * 1024 * 1024;
+
+/** 头像上传失败按状态码映射为面向用户的可读文案（避免直出后端技术原文） */
+const AVATAR_ERRORS: Record<number, string> = {
+  400: '图片格式或内容不受支持，仅支持 jpg / png / webp / gif',
+  413: '图片大小不能超过 2MB',
+  503: '头像服务暂不可用，请稍后再试',
+};
 
 type ChangePasswordFormValues = {
   oldPassword: string;
@@ -20,7 +28,7 @@ type ChangePasswordFormValues = {
 };
 
 export function ProfilePage(): ReactElement {
-  const { message } = AntdApp.useApp();
+  const { notifyError } = useNotify();
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -35,27 +43,34 @@ export function ProfilePage(): ReactElement {
       file.type ?? '',
     );
     if (!allowed) {
-      void message.error('仅支持 jpg / png / webp / gif 图片');
+      notifyError('仅支持 jpg / png / webp / gif 图片');
       return Upload.LIST_IGNORE;
     }
     if ((file.size ?? 0) > AVATAR_MAX_BYTES) {
-      void message.error('图片大小不能超过 2MB');
+      notifyError('图片大小不能超过 2MB');
       return Upload.LIST_IGNORE;
     }
     void uploadAvatarMutation.mutateAsync(file as unknown as File).catch((e) => {
-      void message.error(describeError(e));
+      const status = getErrorStatus(e);
+      const reason =
+        status !== undefined && AVATAR_ERRORS[status] !== undefined ? AVATAR_ERRORS[status] : e;
+      notifyError(reason, { title: '头像上传失败' });
     });
     return Upload.LIST_IGNORE;
   };
 
   const handleFinish = async (values: ChangePasswordFormValues): Promise<void> => {
-    await changePasswordMutation.mutateAsync({
-      oldPassword: values.oldPassword,
-      newPassword: values.newPassword,
-    });
-    queryClient.setQueryData(AUTH_QUERY_KEY, null);
-    setSubmitted(true);
-    void navigate({ to: '/login', replace: true });
+    try {
+      await changePasswordMutation.mutateAsync({
+        oldPassword: values.oldPassword,
+        newPassword: values.newPassword,
+      });
+      queryClient.setQueryData(AUTH_QUERY_KEY, null);
+      setSubmitted(true);
+      void navigate({ to: '/login', replace: true });
+    } catch (e) {
+      notifyError(e, { title: '密码修改失败' });
+    }
   };
 
   return (
@@ -111,15 +126,6 @@ export function ProfilePage(): ReactElement {
               type="success"
               showIcon
               message="密码已修改，请使用新密码重新登录"
-              style={{ marginBottom: 16 }}
-            />
-          ) : null}
-          {changePasswordMutation.isError && !submitted ? (
-            <Alert
-              type="error"
-              showIcon
-              message="修改失败"
-              description={describeError(changePasswordMutation.error)}
               style={{ marginBottom: 16 }}
             />
           ) : null}

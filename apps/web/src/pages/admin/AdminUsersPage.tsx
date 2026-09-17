@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
 import { useMemo, useState } from 'react';
 import {
-  Alert,
   App as AntdApp,
   Button,
   Card,
@@ -29,18 +28,18 @@ import {
   patchUser,
   resetUserPassword,
 } from '../../api/admin';
-import { describeError } from '../../parse-response';
 import { formatDateTime } from '../../format';
 import { useAuth } from '../../hooks/use-auth';
+import { useNotify } from '../../hooks/use-notify';
 import { UserAvatar } from '../../components/UserAvatar';
 import { CardHeading } from '../../components/PageHeader';
 
 /** 用户管理（管理后台）：新增用户、角色调整、启用/禁用、重置密码、删除 */
 export function AdminUsersPage(): ReactElement {
   const { message, modal } = AntdApp.useApp();
+  const { notifyError } = useNotify();
   const { user: currentUser } = useAuth();
   const queryClient = useQueryClient();
-  const [error, setError] = useState<unknown>(null);
   const [search, setSearch] = useState('');
   const [createOpen, setCreateOpen] = useState(false);
   const [createForm] = Form.useForm<AdminCreateUserInput>();
@@ -60,7 +59,7 @@ export function AdminUsersPage(): ReactElement {
     mutationFn: (input: { userId: string; patch: Parameters<typeof patchUser>[1] }) =>
       patchUser(input.userId, input.patch),
     onSuccess: invalidate,
-    onError: (e) => setError(e),
+    onError: (e) => notifyError(e, { title: '状态更新失败' }),
   });
 
   const resetMutation = useMutation({
@@ -81,7 +80,7 @@ export function AdminUsersPage(): ReactElement {
       });
       invalidate();
     },
-    onError: (e) => setError(e),
+    onError: (e) => notifyError(e, { title: '重置密码失败' }),
   });
 
   const deleteMutation = useMutation({
@@ -90,7 +89,7 @@ export function AdminUsersPage(): ReactElement {
       void message.success('用户已删除');
       invalidate();
     },
-    onError: (e) => setError(e),
+    onError: (e) => notifyError(e, { title: '删除用户失败' }),
   });
 
   const createMutation = useMutation({
@@ -101,7 +100,7 @@ export function AdminUsersPage(): ReactElement {
       createForm.resetFields();
       invalidate();
     },
-    onError: (e) => setError(e),
+    onError: (e) => notifyError(e, { title: '创建用户失败' }),
   });
 
   const openAssign = (record: User): void => {
@@ -123,7 +122,7 @@ export function AdminUsersPage(): ReactElement {
         queryClient.setQueryData(['auth'], user);
       }
     },
-    onError: (e) => setError(e),
+    onError: (e) => notifyError(e, { title: '分配角色失败' }),
   });
 
   const filteredUsers = useMemo(() => {
@@ -224,17 +223,6 @@ export function AdminUsersPage(): ReactElement {
 
   return (
     <Space direction="vertical" size="middle" style={{ width: '100%' }}>
-      {error !== null ? (
-        <Alert
-          type="error"
-          showIcon
-          message="操作失败"
-          description={describeError(error)}
-          closable
-          onClose={() => setError(null)}
-        />
-      ) : null}
-
       <Card className="surface-card data-table-card">
         <div className="table-toolbar">
           <Input.Search

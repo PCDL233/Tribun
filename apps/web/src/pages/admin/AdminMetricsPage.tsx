@@ -1,9 +1,9 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
-import { Alert, Card, Skeleton, Table, Tag, Typography } from 'antd';
+import { Card, Skeleton, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
-import { describeError } from '../../parse-response';
 import { CardHeading, PageHeader } from '../../components/PageHeader';
+import { ErrorAlert } from '../../components/ErrorAlert';
 
 type MetricRow = {
   name: string;
@@ -57,15 +57,21 @@ export function AdminMetricsPage(): ReactElement {
   const [metrics, setMetrics] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
 
-  useEffect(() => {
+  const retry = useCallback((): void => {
+    setError(null);
+    setMetrics(null);
     fetch('/metrics')
       .then(async (response) => {
-        if (!response.ok) throw new Error(`${response.status} ${response.statusText}`);
+        if (!response.ok) throw new Error(`指标服务返回错误（HTTP ${response.status}）`);
         return response.text();
       })
       .then(setMetrics)
       .catch(setError);
   }, []);
+
+  useEffect(() => {
+    retry();
+  }, [retry]);
 
   const rows = metrics === null ? [] : parseMetrics(metrics);
   const columns: ColumnsType<MetricRow> = [
@@ -98,7 +104,7 @@ export function AdminMetricsPage(): ReactElement {
       />
       <Card className="surface-card" title={<CardHeading title="Prometheus 指标" />}>
         {error !== null ? (
-          <Alert type="error" showIcon message="加载失败" description={describeError(error)} />
+          <ErrorAlert error={error} title="加载失败" onRetry={retry} />
         ) : metrics === null ? (
           <Skeleton active paragraph={{ rows: 8 }} />
         ) : (

@@ -11,6 +11,7 @@ import {
   LoginSchema,
   RegisterSchema,
 } from '@ai-review/shared';
+import { createRateLimiter } from './rate-limit.js';
 import type { AppEnv } from './app.js';
 
 const scrypt = promisify(scryptCallback);
@@ -49,6 +50,8 @@ export function generateRandomPassword(): string {
 
 export interface AuthDeps {
   users: UserStore;
+  /** 是否允许开放注册（方案 8）；缺省：已存在用户时关闭，需管理员在后台创建 */
+  registrationOpen?: boolean;
 }
 
 /** requireAuth 中间件工厂：校验 Cookie 会话，通过后把 SafeUser 写入 Context 变量 */
@@ -56,14 +59,14 @@ export function createRequireAuth(deps: AuthDeps): MiddlewareHandler<AppEnv> {
   return createMiddleware<AppEnv>(async (c, next) => {
     const token = getCookie(c, SESSION_COOKIE);
     if (token === undefined || token === '') {
-      return c.json({ error: 'authentication required' }, 401);
+      return c.json({ error: '请先登录' }, 401);
     }
     const user = deps.users.getSessionUser(token);
     if (user === undefined) {
-      return c.json({ error: 'session expired or invalid' }, 401);
+      return c.json({ error: '登录已失效，请重新登录' }, 401);
     }
     if (user.status === 'disabled') {
-      return c.json({ error: 'account disabled' }, 403);
+      return c.json({ error: '账号已被禁用' }, 403);
     }
     c.set('user', user);
     await next();
@@ -75,7 +78,7 @@ export const requireAdmin = createMiddleware<AppEnv>(async (c, next) => {
   const user = c.get('user');
   // 管理员判定：拥有 '*' 权限或 role 字段为 admin（assignRoles 会依据角色自动派生 role）
   if (user.permissions.includes('*') === false && user.role !== 'admin') {
-    return c.json({ error: 'admin privilege required' }, 403);
+    return c.json({ error: '需要管理员权限' }, 403);
   }
   await next();
 });
@@ -93,7 +96,7 @@ export function requirePermission(permission: string): MiddlewareHandler<AppEnv>
       user.role === 'admin' ||
       user.permissions.includes(permission);
     if (!allowed) {
-      return c.json({ error: `permission required: ${permission}` }, 403);
+      return c.json({ error: '没有执行此操作的权限' }, 403);
     }
     await next();
   });
@@ -111,7 +114,7 @@ export function requireAnyPermission(...permissions: string[]): MiddlewareHandle
       user.role === 'admin' ||
       permissions.some((p) => user.permissions.includes(p));
     if (!allowed) {
-      return c.json({ error: 'permission required' }, 403);
+      return c.json({ error: '没有执行此操作的权限' }, 403);
     }
     await next();
   });
@@ -124,7 +127,18 @@ function issueSessionCookie(deps: AuthDeps, c: Context, userId: string): void {
     sameSite: 'Lax',
     path: '/',
     maxAge: SESSION_TTL_MS / 1000,
+    // HTTPS 部署下强制 secure（方案 6）；默认仅在生产环境开启，兼容本地 http 开发
+    secure: process.env.NODE_ENV === 'production' || process.env.AI_REVIEW_COOKIE_SECURE === 'true',
   });
+}
+
+// 未知用户的“哑哈希”：登录时对不存在用户也执行一次等代价 scrypt，抹平响应时间差（方案 7）
+let dummyHashPromise: Promise<string> | undefined;
+function getDummyHash(): Promise<string> {
+  if (dummyHashPromise === undefined) {
+    dummyHashPromise = hashPassword('__dummy__rate-limit__');
+  }
+  return dummyHashPromise;
 }
 
 /**
@@ -133,8 +147,23 @@ function issueSessionCookie(deps: AuthDeps, c: Context, userId: string): void {
  * 挂载前缀 /api/auth/*——数据隔离中间件对此前缀放行。
  */
 export function registerAuthRoutes(app: Hono<AppEnv>, deps: AuthDeps): void {
-  app.post('/api/auth/register', zValidator('json', RegisterSchema), async (c) => {
+  // 认证端点限流（方案 1）：按 IP+路径 每分钟 10 次，防在线爆破与撞库。
+  // 每 App 实例独立计数，避免测试等共享模块级状态互相干扰。
+  const authLimiter = createRateLimiter({ windowMs: 60_000, max: 10, keyByPath: true });
+
+  app.post('/api/auth/register', authLimiter, zValidator('json', RegisterSchema), async (c) => {
     const { username, password } = c.req.valid('json');
+    // 开放注册（方案 8）：显式配置优先；缺省为“首个管理员引导后关闭”
+    const openRegistration =
+      deps.registrationOpen !== undefined
+        ? deps.registrationOpen
+        : process.env.AI_REVIEW_ALLOW_REGISTER === 'true' || deps.users.countUsers() === 0;
+    if (!openRegistration) {
+      return c.json(
+        { error: '注册已关闭，请联系管理员开通账号' },
+        403,
+      );
+    }
     let user: SafeUser;
     try {
       user = deps.users.createUser({ username, passwordHash: await hashPassword(password) });
@@ -146,16 +175,23 @@ export function registerAuthRoutes(app: Hono<AppEnv>, deps: AuthDeps): void {
     return c.json(AuthResponseSchema.parse({ user }), 201);
   });
 
-  app.post('/api/auth/login', zValidator('json', LoginSchema), async (c) => {
+  app.post('/api/auth/login', authLimiter, zValidator('json', LoginSchema), async (c) => {
     const { username, password } = c.req.valid('json');
     const user = deps.users.getByUsername(username);
-    // 用户不存在与密码错误统一口径，避免枚举有效用户名
-    const storedHash = user === undefined ? '' : (deps.users.getPasswordHash(user.id) ?? '');
-    if (user === undefined || !(await verifyPassword(password, storedHash))) {
-      return c.json({ error: 'invalid username or password' }, 401);
+    // 用户不存在与密码错误统一口径，避免枚举有效用户名；
+    // 无论用户是否存在都无条件执行一次等代价 scrypt 校验（方案 7 恒时化）——
+    // 若在 user === undefined 时短路跳过 verifyPassword，未知用户名会显著快于错误密码，
+    // 时间侧信道依旧存在。
+    const storedHash =
+      user === undefined
+        ? await getDummyHash()
+        : (deps.users.getPasswordHash(user.id) ?? (await getDummyHash()));
+    const passwordOk = await verifyPassword(password, storedHash);
+    if (user === undefined || !passwordOk) {
+      return c.json({ error: '用户名或密码错误' }, 401);
     }
     if (user.status === 'disabled') {
-      return c.json({ error: 'account disabled' }, 403);
+      return c.json({ error: '账号已被禁用' }, 403);
     }
     issueSessionCookie(deps, c, user.id);
     deps.users.touchLastLogin(user.id);
@@ -182,7 +218,7 @@ export function registerAuthRoutes(app: Hono<AppEnv>, deps: AuthDeps): void {
       const { oldPassword, newPassword } = c.req.valid('json');
       const storedHash = deps.users.getPasswordHash(user.id);
       if (storedHash === undefined || !(await verifyPassword(oldPassword, storedHash))) {
-        return c.json({ error: 'invalid old password' }, 400);
+        return c.json({ error: '当前密码不正确' }, 400);
       }
       deps.users.resetPassword(user.id, await hashPassword(newPassword));
       // 旧密码可能已泄露：改密后吊销全部会话，强制所有端重新登录

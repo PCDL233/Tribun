@@ -1,10 +1,10 @@
 import { useEffect } from 'react';
 import type { ReactElement } from 'react';
 import { useNavigate } from '@tanstack/react-router';
-import { Alert, Button, Card, Form, Input, Typography } from 'antd';
+import { Button, Card, Form, Input, Typography } from 'antd';
 import type { RegisterInput } from '@ai-review/shared/api';
-import { describeError } from '../parse-response';
 import { useAuth, useRegister } from '../hooks/use-auth';
+import { useNotify } from '../hooks/use-notify';
 import { BrandMark } from '../components/Brand';
 
 export type RegisterPageProps = { redirect?: string };
@@ -18,14 +18,19 @@ export function RegisterPage(props: RegisterPageProps): ReactElement {
   const { user } = useAuth();
   const navigate = useNavigate();
   const registerMutation = useRegister();
+  const { notifyError } = useNotify();
 
   useEffect(() => {
     if (user !== null) void navigate({ to: '/', replace: true });
   }, [user, navigate]);
 
   const handleFinish = async (values: RegisterFormValues): Promise<void> => {
-    await registerMutation.mutateAsync({ username: values.username, password: values.password });
-    await navigate({ to: safeRedirectTarget(props.redirect), replace: true });
+    try {
+      await registerMutation.mutateAsync({ username: values.username, password: values.password });
+      await navigate({ to: safeRedirectTarget(props.redirect), replace: true });
+    } catch (e) {
+      notifyError(e, { title: '注册失败' });
+    }
   };
 
   return (
@@ -58,15 +63,6 @@ export function RegisterPage(props: RegisterPageProps): ReactElement {
           <Typography.Paragraph className="auth-form-subtitle">
             注册一个账号，开始你的第一轮代码审查。
           </Typography.Paragraph>
-          {registerMutation.isError ? (
-            <Alert
-              type="error"
-              showIcon
-              message="注册失败"
-              description={describeError(registerMutation.error)}
-              style={{ marginBottom: 22 }}
-            />
-          ) : null}
           <Form<RegisterFormValues>
             layout="vertical"
             onFinish={(values) => void handleFinish(values)}

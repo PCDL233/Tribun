@@ -92,6 +92,9 @@ function makeHarness(runner: PipelineRunner, avatars?: AvatarStore): Harness {
     service,
     metrics,
     ...(avatars === undefined ? {} : { avatars }),
+    // 测试需要多用户注册与任意本地仓库路径；显式放开开放注册与仓库根白名单（生产默认收紧）
+    registrationOpen: true,
+    allowedRoots: ['D:/'],
   });
 }
 
@@ -297,6 +300,20 @@ describe('avatar upload API', () => {
       ...multipart(big, 'image/png'),
     });
     expect(res.status).toBe(413);
+  });
+
+  it('accepts avatars in the 1MB-2MB range (must not be caught by the generic 1MB api cap)', async () => {
+    const app = avatarHarness();
+    const { cookie } = await registerUser(app, 'grace');
+    // 1.5MB 头像：前后端规则均允许（≤2MB），若被 limitBody(1MB) 误拒则回归（修复前返回 413）
+    const file = new Uint8Array(1536 * 1024);
+    file.set(PNG_1PX.subarray(0, 8), 0);
+    const res = await app.request('/api/auth/avatar', {
+      method: 'POST',
+      headers: { ...auth(cookie) },
+      ...multipart(file, 'image/png'),
+    });
+    expect(res.status).toBe(200);
   });
 
   it('requires authentication to upload and returns 404 for users without avatar', async () => {
@@ -906,7 +923,14 @@ describe('review cache integration (方案 3.0 内容哈希去重)', () => {
       runReviewPipeline,
       metrics,
     );
-    return buildApp({ store, users, service, metrics });
+    return buildApp({
+      store,
+      users,
+      service,
+      metrics,
+      registrationOpen: true,
+      allowedRoots: ['D:/'],
+    });
   }
 
   it('persists cache entries through the real pipeline across reviews', async () => {
@@ -1005,5 +1029,235 @@ describe('SSE progress stream', () => {
     const body = await (await streamResponse).text();
     expect(body).toContain('event: failed');
     expect(body).toContain('git repo invalid');
+  });
+});
+
+describe('hardening: rate limits, registration gating, repoPath, constant-time login, body caps', () => {
+  /** 无 registrationOpen / allowedRoots 的默认配置 app（模拟生产默认行为） */
+  function defaultHarness(runner: PipelineRunner = async () => makeState()): Harness {
+    const sqlite = openSqlite(':memory:');
+    const store = new ReviewStore(sqlite);
+    const users = new UserStore(sqlite);
+    const metrics = createReviewMetrics();
+    const service = new ReviewService(store, makeDeps, runner, metrics);
+    return buildApp({ store, users, service, metrics });
+  }
+
+  it('rate limits auth registration per IP+path (11th request in a minute -> 429)', async () => {
+    const app = makeHarness(async () => makeState());
+    // 无 socket 地址时 getClientIp 回退 x-forwarded-for；同 IP 独立计数
+    const xff = { 'x-forwarded-for': '198.51.100.10' };
+    for (let i = 0; i < 10; i += 1) {
+      const res = await app.request('/api/auth/register', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...xff },
+        body: JSON.stringify({ username: `ratelimit-${i}`, password: 'password123' }),
+      });
+      expect(res.status).toBe(201);
+    }
+    const blocked = await app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...xff },
+      body: JSON.stringify({ username: 'ratelimit-over', password: 'password123' }),
+    });
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('retry-after')).not.toBeNull();
+  });
+
+  it('throttles the generic /api/* surface (301st request -> 429)', async () => {
+    const app = defaultHarness();
+    const { cookie } = await registerUser(app, 'boss');
+    // 用独立 IP 触发泛化限流，避免与注册共用计数
+    const xff = { 'x-forwarded-for': '203.0.113.77' };
+    const statuses: number[] = [];
+    for (let i = 0; i < 301; i += 1) {
+      const res = await app.request('/api/reviews', { headers: { ...auth(cookie), ...xff } });
+      statuses.push(res.status);
+    }
+    expect(statuses[299]).toBe(200);
+    expect(statuses[300]).toBe(429);
+  });
+
+  it('gates open registration after the first admin exists (production default)', async () => {
+    const app = defaultHarness();
+    const first = await registerUser(app, 'founder');
+    expect(first.role).toBe('admin');
+    // 第二个自注册：默认已关闭 → 403
+    const second = await app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'sneaker', password: 'password123' }),
+    });
+    expect(second.status).toBe(403);
+  });
+
+  it('forbids registration when registrationOpen is explicitly false', async () => {
+    const sqlite = openSqlite(':memory:');
+    const store = new ReviewStore(sqlite);
+    const users = new UserStore(sqlite);
+    const metrics = createReviewMetrics();
+    const service = new ReviewService(store, makeDeps, async () => makeState(), metrics);
+    const app = buildApp({ store, users, service, metrics, registrationOpen: false });
+    const res = await app.request('/api/auth/register', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'nobody', password: 'password123' }),
+    });
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects repoPath outside the allowed workspace roots', async () => {
+    // 默认根 = cwd；绝对逃逸路径（两平台均绝对）应被拒绝
+    const app = defaultHarness();
+    const { cookie } = await registerUser(app, 'boss');
+    for (const repoPath of ['/etc/passwd', '../..']) {
+      const res = await app.request('/api/reviews', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', ...auth(cookie) },
+        body: JSON.stringify({ repoPath, mode: 'fast' }),
+      });
+      expect(res.status).toBe(400);
+    }
+    // 白名单根（makeHarness 使用 ['D:/']）之外的路径同样拒绝
+    const app2 = makeHarness(async () => makeState());
+    const { cookie: cookie2 } = await registerUser(app2, 'boss');
+    const res2 = await app2.request('/api/reviews', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(cookie2) },
+      body: JSON.stringify({ repoPath: '/etc/passwd', mode: 'fast' }),
+    });
+    expect(res2.status).toBe(400);
+  });
+
+  it('keeps login timing constant for unknown usernames (dummy scrypt verify runs)', async () => {
+    const app = makeHarness(async () => makeState());
+    await registerUser(app, 'timinguser');
+    // 预热：首次未知用户登录会一次性计算哑哈希，随后缓存
+    const warm = await app.request('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-forwarded-for': '10.0.0.1' },
+      body: JSON.stringify({ username: 'warmup-user', password: 'wrong-password-123' }),
+    });
+    expect(warm.status).toBe(401);
+
+    const sampleMedian = async (username: string, base: number): Promise<number> => {
+      const times: number[] = [];
+      for (let i = 0; i < 5; i += 1) {
+        const start = performance.now();
+        const res = await app.request('/api/auth/login', {
+          method: 'POST',
+          headers: {
+            'content-type': 'application/json',
+            'x-forwarded-for': `10.0.0.${base + i}`,
+          },
+          body: JSON.stringify({ username, password: 'wrong-password-123' }),
+        });
+        times.push(performance.now() - start);
+        expect(res.status).toBe(401);
+      }
+      return times.sort((a, b) => a - b)[2];
+    };
+
+    const unknownMedian = await sampleMedian('no-such-user-xyz', 100);
+    const wrongMedian = await sampleMedian('timinguser', 200);
+    // 恒时化：未知用户名与错误密码耗时同量级（宽松 4x 上限防 CI 抖动）；
+    // 修复前未知用户短路跳过 scrypt（耗时 <1ms），该断言必失败
+    expect(unknownMedian).toBeGreaterThan(wrongMedian / 4);
+    // scrypt 至少 ~30ms：防哑校验被跳过或短路回归
+    expect(unknownMedian).toBeGreaterThan(15);
+  });
+
+  it('rejects chunked bodies without Content-Length via streaming byte counting', async () => {
+    const app = defaultHarness();
+    // 无 Content-Length 的流式请求体（chunked 语义）：旧实现直接放行，现在按实际字节封顶
+    const payload = new TextEncoder().encode('x'.repeat(1536 * 1024));
+    const req = new Request('http://local/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: new ReadableStream({
+        start(controller) {
+          controller.enqueue(payload);
+          controller.close();
+        },
+      }),
+      duplex: 'half',
+    });
+    const res = await app.request(req);
+    expect(res.status).toBe(413);
+    expect(await res.text()).toContain('请求体过大');
+  });
+
+  it('replays completed blocking per the original blockOn threshold', async () => {
+    // WARNING 发现（无 BLOCKER）：blockOn=NIT 时实时与重放都应判为阻断
+    const warningState = (): ReviewState => {
+      const state = makeState();
+      state.findings = [
+        {
+          agent: 'static',
+          severity: 'WARNING',
+          confidence: 0.8,
+          filePath: 'a.ts',
+          lineStart: 1,
+          lineEnd: 1,
+          title: 'unused variable',
+          description: 'desc',
+          isFalsePositive: false,
+        },
+      ];
+      return state;
+    };
+    const app = makeHarness(async () => warningState());
+    const { cookie } = await registerUser(app, 'boss');
+    const started = await app.request('/api/reviews', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(cookie) },
+      body: JSON.stringify({ repoPath: 'D:/tmp/repo', mode: 'fast', blockOn: 'NIT' }),
+    });
+    expect(started.status).toBe(202);
+    const { reviewId }: { reviewId: string } = await started.json();
+    await vi.waitFor(async () => {
+      const detail = await app.request(`/api/reviews/${reviewId}`, { headers: auth(cookie) });
+      expect(detail.status).toBe(200);
+    });
+    // 晚连接重放：blocking 按发起时阈值（NIT）重算 → true（修复前 blockerCount=0 → false）
+    const body = await (
+      await app.request(`/api/reviews/${reviewId}/events`, { headers: auth(cookie) })
+    ).text();
+    expect(body).toContain('event: completed');
+    expect(body).toContain('"blocking":true');
+  });
+});
+
+describe('hardening: queued review cancellation', () => {
+  it('finalizes a queued review as cancelled immediately (no slot wait)', async () => {
+    const previous = process.env.AI_REVIEW_MAX_CONCURRENT;
+    process.env.AI_REVIEW_MAX_CONCURRENT = '1';
+    const gate = newGate();
+    const app = makeHarness(makeGatedRunner(gate));
+    if (previous === undefined) delete process.env.AI_REVIEW_MAX_CONCURRENT;
+    else process.env.AI_REVIEW_MAX_CONCURRENT = previous;
+
+    const { cookie } = await registerUser(app, 'boss');
+    const firstId = await startReview(app, cookie); // 占用唯一槽位（gate 未放行）
+    const queuedId = await startReview(app, cookie); // 排队
+
+    const cancel = await app.request(`/api/reviews/${queuedId}/cancel`, {
+      method: 'POST',
+      headers: auth(cookie),
+    });
+    expect(cancel.status).toBe(200);
+
+    // 排队任务被取消：立即落库并广播 cancelled（SSE 晚连接可重放）
+    const body = await (
+      await app.request(`/api/reviews/${queuedId}/events`, { headers: auth(cookie) })
+    ).text();
+    expect(body).toContain('event: cancelled');
+
+    // 释放 gate 让第一个任务正常完成，避免悬挂
+    gate.resolve();
+    await vi.waitFor(async () => {
+      const detail = await app.request(`/api/reviews/${firstId}`, { headers: auth(cookie) });
+      expect(detail.status).toBe(200);
+    });
   });
 });

@@ -1,5 +1,4 @@
 import {
-  Alert,
   App as AntdApp,
   Button,
   Card,
@@ -19,11 +18,12 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from '@tanstack/react-router';
 import { useState } from 'react';
 import type { ReactElement } from 'react';
-import { describeError } from '../parse-response';
 import { deleteReview, fetchReviewPage, rerunReview } from '../api';
 import { formatDateTime } from '../format';
 import { PageHeader } from '../components/PageHeader';
 import { useAuth } from '../hooks/use-auth';
+import { useNotify } from '../hooks/use-notify';
+import { ErrorAlert } from '../components/ErrorAlert';
 
 type ReviewFilters = {
   q?: string;
@@ -141,6 +141,7 @@ function buildColumns(opts: {
 
 export function ReviewListView(props: { onOpen: (reviewId: string) => void }): ReactElement {
   const { message } = AntdApp.useApp();
+  const { notifyError } = useNotify();
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -159,7 +160,7 @@ export function ReviewListView(props: { onOpen: (reviewId: string) => void }): R
       void message.success('已触发重新运行');
       void queryClient.invalidateQueries({ queryKey: ['reviews'] });
     },
-    onError: (e) => void message.error(describeError(e)),
+    onError: (e) => notifyError(e, { title: '重跑失败' }),
   });
   const deleteMutation = useMutation({
     mutationFn: (reviewId: string) => deleteReview(reviewId),
@@ -167,7 +168,7 @@ export function ReviewListView(props: { onOpen: (reviewId: string) => void }): R
       void message.success('审查记录已删除');
       void queryClient.invalidateQueries({ queryKey: ['reviews'] });
     },
-    onError: (e) => void message.error(describeError(e)),
+    onError: (e) => notifyError(e, { title: '删除失败' }),
   });
 
   const clearFilters = (): void => {
@@ -260,11 +261,10 @@ export function ReviewListView(props: { onOpen: (reviewId: string) => void }): R
       </Card>
       <Card className="surface-card data-table-card">
         {reviewsQuery.isError ? (
-          <Alert
-            type="error"
-            showIcon
-            message="审查历史加载失败"
-            description={describeError(reviewsQuery.error)}
+          <ErrorAlert
+            error={reviewsQuery.error}
+            title="审查历史加载失败"
+            onRetry={() => void reviewsQuery.refetch()}
           />
         ) : reviewsQuery.isPending ? (
           <Skeleton active paragraph={{ rows: 7 }} />

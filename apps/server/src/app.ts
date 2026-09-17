@@ -1,5 +1,7 @@
 import { existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { resolve as resolvePath, sep } from 'node:path';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
+import { compress } from 'hono/compress';
 import { Hono } from 'hono';
 import { streamSSE } from 'hono/streaming';
 import { zValidator } from '@hono/zod-validator';
@@ -40,6 +42,8 @@ import {
 import type { ReviewMetrics } from './metrics.js';
 import type { ReviewStageEvent } from './review-service.js';
 import { AvatarError, AvatarStore, AVATAR_MAX_BYTES } from './avatar.js';
+import { createRateLimiter } from './rate-limit.js';
+import { securityHeaders } from './security-headers.js';
 import type { ReviewService } from './review-service.js';
 
 /** POST /api/reviews 入参（方案 2.3：API 入参经 zod 校验） */
@@ -64,6 +68,10 @@ export type AppDeps = {
   metrics: ReviewMetrics;
   /** 管理员配置文件位置；未提供时使用当前目录 .ai-review.yml */
   configPath?: string;
+  /** 允许审查的仓库根目录（方案 3：防任意本地路径读取）；缺省为 process.cwd() */
+  allowedRoots?: readonly string[];
+  /** 是否允许开放注册（方案 8）；缺省：已存在用户后关闭 */
+  registrationOpen?: boolean;
   /** 可选知识库管理器，未装配时返回 idle 状态 */
   knowledge?: KnowledgeManager;
   /** 可选头像存储；未装配时头像上传返回 503 */
@@ -124,11 +132,96 @@ class EventQueue<T> {
  * - GET  /api/admin/tools/hook-script 获取 pre-commit hook 脚本（admin）
  * - GET  /metrics              Prometheus 指标（admin）
  */
+/**
+ * 校验 repoPath 是否落在允许的根目录内（方案 3）：
+ * 拒绝空路径、绝对路径逃逸到允许根之外的情况，防任意本地目录/文件读取。
+ */
+export function assertRepoPathAllowed(
+  repoPath: string,
+  roots: readonly string[] = [process.cwd()],
+): void {
+  if (repoPath === '') throw new Error('repoPath must not be empty');
+  const resolved = resolvePath(repoPath);
+  for (const root of roots) {
+    const rootResolved = resolvePath(root);
+    // 目录边界：根目录本身或其子路径合法；根目录已以分隔符结尾（如 Windows 'D:/'→'D:\\'）时不重复追加
+    const boundary = rootResolved.endsWith(sep) ? rootResolved : rootResolved + sep;
+    if (resolved === rootResolved || resolved.startsWith(boundary)) return;
+  }
+  throw new Error('repoPath is outside the allowed workspace roots');
+}
+
+/**
+ * 请求体大小上限（方案 2：防内存 DoS）。
+ * - 有 Content-Length：先按头快速拒绝（读 body 前拦截）
+ * - 无论有无 CL 均逐块计数实际字节：修复 chunked/伪造 CL 绕过，超限即断流 413；
+ *   未超限则回填等价 Request，供后续 zValidator / formData 正常解析
+ * - exempt：对该路径跳过（avatar 有专属上限）
+ */
+function limitBody(maxBytes: number, exempt?: (path: string) => boolean) {
+  return async (c: import('hono').Context, next: () => Promise<void>) => {
+    if (exempt !== undefined && exempt(c.req.path)) return next();
+    const raw = c.req.raw;
+    if (raw.body === null || raw.method === 'GET' || raw.method === 'HEAD') return next();
+    const declared = c.req.header('content-length');
+    if (declared !== undefined) {
+      const length = Number(declared);
+      // CL 仅作快速拒绝；真实体积仍按流计数（声明值可与 chunked 实际体积不符）
+      if (Number.isFinite(length) && length > maxBytes) {
+        return c.json({ error: '请求体过大' }, 413);
+      }
+    }
+    const reader = raw.body.getReader();
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done === true) break;
+      total += value.byteLength;
+      if (total > maxBytes) {
+        await reader.cancel().catch(() => undefined);
+        return c.json({ error: '请求体过大' }, 413);
+      }
+      chunks.push(value);
+    }
+    // 回填等价 Request（Blob 体，无 CL 依赖），后续 c.req.json()/formData() 从它读取
+    const headers = new Headers(raw.headers);
+    headers.set('content-length', String(total));
+    c.req.raw = new Request(raw.url, { method: raw.method, headers, body: new Blob(chunks) });
+    await next();
+  };
+}
+
+// 响应压缩（方案 12）：模块级创建一次复用；SSE 端点在挂载处跳过，避免破坏流式分块
+const gzipMiddleware = compress({ encoding: 'gzip' });
+
 export function buildApp(deps: AppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
 
+  // —— 全局安全响应头（方案 5）——
+  app.use('*', securityHeaders());
+
+  // —— 响应压缩（方案 12）：跳过 SSE 实时事件端点，避免破坏流式分块 ——
+  app.use('*', async (c, next) => {
+    if (c.req.path.endsWith('/events')) return next();
+    return gzipMiddleware(c, next);
+  });
+
+  // —— /api/* 泛化限流（方案 1：认证端点另有更严限流）——
+  app.use('/api/*', createRateLimiter({ windowMs: 60_000, max: 300 }));
+
+  // —— /api/* 请求体大小上限（方案 2）：avatar 路由有专属上限（2MB+multipart 开销），在此豁免 ——
+  app.use('/api/auth/avatar', limitBody(AVATAR_MAX_BYTES + 256 * 1024));
+  app.use(
+    '/api/*',
+    limitBody(1024 * 1024, (path) => path === '/api/auth/avatar'),
+  );
+
   // —— 认证路由（匿名可访问 + me/change-password 自带 requireAuth）——
-  registerAuthRoutes(app, { users: deps.users });
+  registerAuthRoutes(app, {
+    users: deps.users,
+    ...(deps.registrationOpen === undefined ? {} : { registrationOpen: deps.registrationOpen }),
+  });
 
   // —— 数据隔离：除 auth 前缀外所有 /api 请求必须登录 ——
   const requireAuth = createRequireAuth({ users: deps.users });
@@ -141,21 +234,30 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   // /api/auth/* 被上方全局中间件放行，故在此显式挂 requireAuth。
   app.post('/api/auth/avatar', createRequireAuth({ users: deps.users }), async (c) => {
     if (deps.avatars === undefined) {
-      return c.json({ error: 'avatar storage is not configured' }, 503);
+      return c.json({ error: '头像存储未配置，请联系管理员' }, 503);
+    }
+    // 读取前按 Content-Length 前置拦截，避免超大 multipart 被整体读入内存（方案 2）；
+    // chunked / 无 CL 请求由上方 limitBody 流式计数兜底
+    const avatarContentLength = Number(c.req.header('content-length') ?? 0);
+    if (
+      Number.isFinite(avatarContentLength) &&
+      avatarContentLength > AVATAR_MAX_BYTES + 256 * 1024
+    ) {
+      return c.json({ error: '图片大小不能超过 2MB' }, 413);
     }
     let body: FormData;
     try {
       body = await c.req.formData();
     } catch {
-      return c.json({ error: 'invalid multipart body' }, 400);
+      return c.json({ error: '图片上传数据无效，请重新选择图片' }, 400);
     }
     const file = body.get('avatar');
     if (!(file instanceof File)) {
-      return c.json({ error: 'avatar file is required (field: avatar)' }, 400);
+      return c.json({ error: '未接收到头像文件' }, 400);
     }
     const bytes = new Uint8Array(await file.arrayBuffer());
     if (bytes.byteLength > AVATAR_MAX_BYTES) {
-      return c.json({ error: 'avatar must be <= 2MB' }, 413);
+      return c.json({ error: '图片大小不能超过 2MB' }, 413);
     }
     try {
       deps.avatars.save(c.get('user').id, bytes);
@@ -165,19 +267,19 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     }
     deps.users.setAvatarUrl(c.get('user').id, `/api/users/${c.get('user').id}/avatar`);
     const user = deps.users.getById(c.get('user').id);
-    if (user === undefined) return c.json({ error: 'user not found' }, 404);
+    if (user === undefined) return c.json({ error: '用户不存在' }, 404);
     return c.json(AuthResponseSchema.parse({ user }));
   });
 
   // 头像读取：登录可见（业务侧可读任何用户头像，供后台列表展示）
   app.get('/api/users/:id/avatar', (c) => {
     if (deps.avatars === undefined)
-      return c.json({ error: 'avatar storage is not configured' }, 503);
+      return c.json({ error: '头像存储未配置，请联系管理员' }, 503);
     const target = deps.users.getById(c.req.param('id'));
     if (target === undefined || target.avatarUrl === null)
-      return c.json({ error: 'avatar not found' }, 404);
+      return c.json({ error: '头像不存在' }, 404);
     const avatar = deps.avatars.read(target.id);
-    if (avatar === null) return c.json({ error: 'avatar not found' }, 404);
+    if (avatar === null) return c.json({ error: '头像不存在' }, 404);
     return c.body(avatar.buffer, 200, {
       'content-type': avatar.mime,
       'cache-control': 'no-store',
@@ -191,6 +293,12 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
 
   app.post('/api/reviews', zValidator('json', StartReviewSchema), (c) => {
     const { repoPath, mode, blockOn } = c.req.valid('json');
+    // 方案 3：仅允许审查落在白名单根目录内的仓库，防任意本地路径读取
+    try {
+      assertRepoPathAllowed(repoPath, deps.allowedRoots ?? [process.cwd()]);
+    } catch {
+      return c.json({ error: '仓库路径不在允许的目录白名单内' }, 400);
+    }
     const createdBy = c.get('user').id;
     return c.json(
       {
@@ -223,7 +331,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const current = c.get('user');
     const reviewId = c.req.param('id');
     if (!canAccessReview(deps, current, reviewId))
-      return c.json({ error: 'review not found' }, 404);
+      return c.json({ error: '审查记录不存在' }, 404);
     try {
       return c.json(ReviewDiffResponseSchema.parse({ diffText: deps.store.getDiff(reviewId) }));
     } catch (e) {
@@ -236,7 +344,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const current = c.get('user');
     const reviewId = c.req.param('id');
     if (!canAccessReview(deps, current, reviewId))
-      return c.json({ error: 'review not found' }, 404);
+      return c.json({ error: '审查记录不存在' }, 404);
     try {
       return c.json({ reviewId: deps.service.rerunReview(reviewId, current.id) }, 202);
     } catch (e) {
@@ -249,9 +357,9 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const current = c.get('user');
     const reviewId = c.req.param('id');
     if (!canAccessReview(deps, current, reviewId))
-      return c.json({ error: 'review not found' }, 404);
+      return c.json({ error: '审查记录不存在' }, 404);
     if (!deps.service.cancelReview(reviewId))
-      return c.json({ error: 'review is not running' }, 409);
+      return c.json({ error: '审查任务已结束或不存在' }, 409);
     return c.json(CancelReviewResponseSchema.parse({ cancelled: true }));
   });
 
@@ -259,7 +367,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const current = c.get('user');
     const reviewId = c.req.param('id');
     if (!canAccessReview(deps, current, reviewId))
-      return c.json({ error: 'review not found' }, 404);
+      return c.json({ error: '审查记录不存在' }, 404);
     return c.json(DeleteReviewResponseSchema.parse({ deleted: deps.store.deleteReview(reviewId) }));
   });
 
@@ -267,10 +375,10 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const current = c.get('user');
     const reviewId = c.req.param('id');
     if (!canAccessReview(deps, current, reviewId))
-      return c.json({ error: 'review not found' }, 404);
+      return c.json({ error: '审查记录不存在' }, 404);
     const format = c.req.query('format') ?? 'markdown';
     if (format !== 'markdown' && format !== 'json' && format !== 'html')
-      return c.json({ error: 'format must be markdown, html or json' }, 400);
+      return c.json({ error: '导出格式仅支持 markdown / html / json' }, 400);
     try {
       const report = deps.store.getReportDetail(reviewId);
       const body =
@@ -306,7 +414,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const current = c.get('user');
     const reviewId = c.req.param('id');
     if (!canAccessReview(deps, current, reviewId))
-      return c.json({ error: 'review not found' }, 404);
+      return c.json({ error: '审查记录不存在' }, 404);
     try {
       return c.json(deps.store.getReportDetail(reviewId));
     } catch (e) {
@@ -318,16 +426,16 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   app.patch('/api/findings/:id', zValidator('json', FalsePositiveSchema), (c) => {
     const id = Number(c.req.param('id'));
     if (!Number.isInteger(id) || id <= 0) {
-      return c.json({ error: 'invalid finding id' }, 400);
+      return c.json({ error: '发现 ID 无效' }, 400);
     }
     const current = c.get('user');
     const owner = deps.store.getFindingReviewOwner(id);
     if (owner !== current.id && current.role !== 'admin') {
-      return c.json({ error: 'finding not found' }, 404);
+      return c.json({ error: '发现记录不存在' }, 404);
     }
     const { isFalsePositive } = c.req.valid('json');
     if (!deps.store.setFindingFalsePositive(id, isFalsePositive)) {
-      return c.json({ error: 'finding not found' }, 404);
+      return c.json({ error: '发现记录不存在' }, 404);
     }
     return c.json({ updated: true });
   });
@@ -336,7 +444,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const current = c.get('user');
     const reviewId = c.req.param('id');
     if (!canAccessReview(deps, current, reviewId))
-      return c.json({ error: 'review not found' }, 404);
+      return c.json({ error: '审查记录不存在' }, 404);
 
     const queue = new EventQueue<ReviewStageEvent>();
     const unsubscribe = deps.service.subscribe(reviewId, (event) => queue.push(event));
@@ -391,7 +499,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   app.post('/api/admin/init-config', requirePermission('/admin/init'), (c) => {
     const configPath = deps.configPath ?? '.ai-review.yml';
     if (existsSync(configPath)) {
-      return c.json({ error: 'config file already exists' }, 409);
+      return c.json({ error: '配置文件已存在' }, 409);
     }
     const config = AiReviewConfigSchema.parse({});
     writeFileSync(configPath, stringifyYaml(config), 'utf8');
@@ -441,7 +549,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
 
   app.post('/api/admin/knowledge/reindex', requirePermission('/admin/knowledge'), (c) => {
     if (deps.knowledge === undefined)
-      return c.json({ error: 'knowledge manager is not configured' }, 503);
+      return c.json({ error: '知识库服务未配置' }, 503);
     void deps.knowledge.reindex().catch(() => undefined);
     return c.json(KnowledgeReindexResponseSchema.parse({ accepted: true }), 202);
   });
@@ -511,7 +619,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
           priority: input.priority,
           permissions: input.permissions,
         });
-        if (role === undefined) return c.json({ error: 'role not found' }, 404);
+        if (role === undefined) return c.json({ error: '角色不存在' }, 404);
         return c.json(RoleResponseSchema.parse({ role }));
       } catch (e) {
         if (e instanceof StoreError) return c.json({ error: e.message }, 409);
@@ -523,7 +631,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   app.delete('/api/admin/roles/:id', requirePermission('/admin/roles'), (c) => {
     try {
       if (!deps.users.deleteRole(c.req.param('id'))) {
-        return c.json({ error: 'role not found' }, 404);
+        return c.json({ error: '角色不存在' }, 404);
       }
       return c.json({ deleted: true });
     } catch (e) {
@@ -540,10 +648,10 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     (c) => {
       const { roleIds } = c.req.valid('json');
       if (!deps.users.assignRoles(c.req.param('id'), roleIds)) {
-        return c.json({ error: 'user not found' }, 404);
+        return c.json({ error: '用户不存在' }, 404);
       }
       const user = deps.users.getById(c.req.param('id'));
-      if (user === undefined) return c.json({ error: 'user not found' }, 404);
+      if (user === undefined) return c.json({ error: '用户不存在' }, 404);
       return c.json(AuthResponseSchema.parse({ user }));
     },
   );
@@ -558,14 +666,14 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
       const patch = c.req.valid('json');
       // 防自锁：唯一操作人不可自降权限或自禁用（admin 数量判定交给列表页展示，此处守住直接风险）
       if (targetId === current.id && (patch.role === 'user' || patch.status === 'disabled')) {
-        return c.json({ error: 'cannot demote or disable your own account' }, 400);
+        return c.json({ error: '不能降级或禁用当前登录账号' }, 400);
       }
       let updated = false;
       if (patch.role !== undefined) updated = deps.users.updateUserRole(targetId, patch.role);
       if (patch.status !== undefined) updated = deps.users.setUserStatus(targetId, patch.status);
-      if (!updated) return c.json({ error: 'user not found' }, 404);
+      if (!updated) return c.json({ error: '用户不存在' }, 404);
       const nextUser = deps.users.getById(targetId);
-      if (nextUser === undefined) return c.json({ error: 'user not found' }, 404);
+      if (nextUser === undefined) return c.json({ error: '用户不存在' }, 404);
       return c.json({ user: nextUser });
     },
   );
@@ -574,7 +682,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     const targetId = c.req.param('id');
     const newPassword = generateRandomPassword();
     if (!deps.users.resetPassword(targetId, await hashPassword(newPassword))) {
-      return c.json({ error: 'user not found' }, 404);
+      return c.json({ error: '用户不存在' }, 404);
     }
     // 旧凭据立即失效
     deps.users.deleteSessionsForUser(targetId);
@@ -584,9 +692,9 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   app.delete('/api/admin/users/:id', requirePermission('/admin/users'), (c) => {
     const targetId = c.req.param('id');
     if (targetId === c.get('user').id) {
-      return c.json({ error: 'cannot delete your own account' }, 400);
+      return c.json({ error: '不能删除当前登录账号' }, 400);
     }
-    if (!deps.users.deleteUser(targetId)) return c.json({ error: 'user not found' }, 404);
+    if (!deps.users.deleteUser(targetId)) return c.json({ error: '用户不存在' }, 404);
     return c.json({ deleted: true });
   });
 
@@ -625,10 +733,11 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     );
   });
 
-  // 统一结构化错误响应：未分类异常不向调用方泄露堆栈，仅透出 message
-  app.onError((error, c) =>
-    c.json({ error: error instanceof Error ? error.message : String(error) }, 500),
-  );
+  // 统一错误响应（方案 4）：完整异常仅记录到服务端日志，向调用方返回泛化信息，避免泄露内部路径/细节
+  app.onError((error, c) => {
+    console.error(`[ai-review] unhandled error on ${c.req.method} ${c.req.path}:`, error);
+    return c.json({ error: '服务器内部错误' }, 500);
+  });
 
   return app;
 }

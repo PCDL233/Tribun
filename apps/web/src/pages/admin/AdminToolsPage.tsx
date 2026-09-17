@@ -4,17 +4,22 @@ import { useMutation } from '@tanstack/react-query';
 import { Alert, Button, Card, Input, InputNumber, Space, Table, Tag, Typography } from 'antd';
 import type { ColumnsType } from 'antd/es/table';
 import { analyzeComplexity, scanSecrets, type FunctionMetrics } from '../../api';
-import { describeError } from '../../parse-response';
 import { CardHeading, PageHeader } from '../../components/PageHeader';
+import { useNotify } from '../../hooks/use-notify';
 
 export function AdminToolsPage(): ReactElement {
+  const { notifyError } = useNotify();
   const [diffText, setDiffText] = useState('');
   const [source, setSource] = useState('');
   const [threshold, setThreshold] = useState<number | null>(15);
 
-  const secretMutation = useMutation({ mutationFn: () => scanSecrets(diffText) });
+  const secretMutation = useMutation({
+    mutationFn: () => scanSecrets(diffText),
+    onError: (e) => notifyError(e, { title: '扫描失败' }),
+  });
   const complexityMutation = useMutation({
     mutationFn: () => analyzeComplexity(source, threshold ?? undefined),
+    onError: (e) => notifyError(e, { title: '检查失败' }),
   });
 
   const functionColumns: ColumnsType<FunctionMetrics> = [
@@ -65,15 +70,6 @@ export function AdminToolsPage(): ReactElement {
         >
           扫描
         </Button>
-        {secretMutation.isError && (
-          <Alert
-            style={{ marginTop: 16 }}
-            type="error"
-            showIcon
-            message="扫描失败"
-            description={describeError(secretMutation.error)}
-          />
-        )}
         {secretMutation.data !== undefined && (
           <div style={{ marginTop: 16 }}>
             {secretMutation.data.length === 0 ? (
@@ -124,15 +120,6 @@ export function AdminToolsPage(): ReactElement {
         >
           检查
         </Button>
-        {complexityMutation.isError && (
-          <Alert
-            style={{ marginTop: 16 }}
-            type="error"
-            showIcon
-            message="检查失败"
-            description={describeError(complexityMutation.error)}
-          />
-        )}
         {complexityMutation.data !== undefined && (
           <div style={{ marginTop: 16 }}>
             {complexityMutation.data.length === 0 ? (

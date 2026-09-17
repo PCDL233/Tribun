@@ -15,6 +15,8 @@ export const reviews = sqliteTable('reviews', {
   /** 如 "mock + 静态分析" */
   model: text('model').notNull(),
   mode: text('mode', { enum: ['fast', 'full'] }).notNull(),
+  /** 发起时配置的阻断阈值（SSE 晚连接重放需按原阈值重算 blocking）；存量记录为 NULL（等同 BLOCKER） */
+  blockOn: text('block_on', { enum: ['BLOCKER', 'WARNING', 'NIT'] }),
   status: text('status', { enum: ['completed', 'failed', 'cancelled'] })
     .notNull()
     .default('completed'),

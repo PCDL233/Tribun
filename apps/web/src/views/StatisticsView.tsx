@@ -1,13 +1,13 @@
 import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import type { ReactElement } from 'react';
-import { Alert, Card, Col, Empty, Row, Segmented, Skeleton, Statistic, Typography } from 'antd';
+import { Card, Col, Empty, Row, Segmented, Skeleton, Statistic, Typography } from 'antd';
 import type { EChartsCoreOption } from 'echarts/core';
 import type { ReviewStats } from '@ai-review/shared/api';
 import { fetchStats } from '../api';
-import { describeError } from '../parse-response';
 import { StatChart } from '../components/StatChart';
 import { CardHeading, PageHeader } from '../components/PageHeader';
+import { LoadErrorState } from '../components/ErrorAlert';
 
 const SEVERITY_COLORS: Record<string, string> = {
   BLOCKER: '#cf1322',
@@ -272,11 +272,10 @@ export function StatisticsView(): ReactElement {
     );
   if (statsQuery.isError)
     return (
-      <Alert
-        type="error"
-        showIcon
-        message="统计数据加载失败"
-        description={describeError(statsQuery.error)}
+      <LoadErrorState
+        error={statsQuery.error}
+        title="统计数据加载失败"
+        onRetry={() => void statsQuery.refetch()}
       />
     );
   const stats = statsQuery.data;

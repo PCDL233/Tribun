@@ -68,7 +68,7 @@ export class AvatarStore {
   public save(userId: string, buffer: Uint8Array): string {
     mkdirSync(this.dir, { recursive: true });
     const type = detectImageType(buffer);
-    if (type === null) throw new AvatarError('unsupported image type');
+    if (type === null) throw new AvatarError('仅支持 jpg / png / webp / gif 格式的图片');
     const fileName = `${userId}.${type}`;
     // 覆盖旧文件：清理同用户其它扩展名（png→jpeg 等格式切换时避免残留）
     for (const existing of readdirSync(this.dir)) {

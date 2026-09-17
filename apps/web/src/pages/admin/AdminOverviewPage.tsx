@@ -1,7 +1,6 @@
 import type { ReactElement } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
-  Alert,
   Card,
   Col,
   Empty,
@@ -14,8 +13,8 @@ import {
   Typography,
 } from 'antd';
 import { fetchAdminOverview } from '../../api/admin';
-import { describeError } from '../../parse-response';
 import { CardHeading, PageHeader } from '../../components/PageHeader';
+import { ErrorAlert } from '../../components/ErrorAlert';
 
 export function AdminOverviewPage(): ReactElement {
   const overviewQuery = useQuery({ queryKey: ['admin', 'overview'], queryFn: fetchAdminOverview });
@@ -27,11 +26,10 @@ export function AdminOverviewPage(): ReactElement {
     );
   if (overviewQuery.isError)
     return (
-      <Alert
-        type="error"
-        showIcon
-        message="概览数据加载失败"
-        description={describeError(overviewQuery.error)}
+      <ErrorAlert
+        error={overviewQuery.error}
+        title="概览数据加载失败"
+        onRetry={() => void overviewQuery.refetch()}
       />
     );
   const overview = overviewQuery.data;

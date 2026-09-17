@@ -23,10 +23,11 @@ import {
 import type { ColumnsType } from 'antd/es/table';
 import type { ReviewListItem } from '@ai-review/shared/api';
 import { deleteReview, fetchReviews, fetchStats } from '../api';
-import { describeError } from '../parse-response';
 import { useAuth } from '../hooks/use-auth';
+import { useNotify } from '../hooks/use-notify';
 import { formatDateTime } from '../format';
 import { CardHeading, PageHeader } from '../components/PageHeader';
+import { LoadErrorState } from '../components/ErrorAlert';
 
 function formatCount(value: number): string {
   return new Intl.NumberFormat('zh-CN').format(value);
@@ -34,6 +35,7 @@ function formatCount(value: number): string {
 
 export function HomePage(): ReactElement {
   const { message } = AntdApp.useApp();
+  const { notifyError } = useNotify();
   const { user } = useAuth();
   const navigate = useNavigate();
   const queryClient = useQueryClient();
@@ -46,7 +48,7 @@ export function HomePage(): ReactElement {
       void queryClient.invalidateQueries({ queryKey: ['reviews'] });
       void queryClient.invalidateQueries({ queryKey: ['stats'] });
     },
-    onError: (e) => void message.error(describeError(e)),
+    onError: (e) => notifyError(e, { title: '删除失败' }),
   });
 
   const recentColumns: ColumnsType<ReviewListItem> = [
@@ -143,11 +145,11 @@ export function HomePage(): ReactElement {
       </Card>
 
       {statsQuery.isError ? (
-        <Card className="surface-card">
-          <Typography.Text type="danger">
-            统计数据加载失败：{describeError(statsQuery.error)}
-          </Typography.Text>
-        </Card>
+        <LoadErrorState
+          error={statsQuery.error}
+          title="统计数据加载失败"
+          onRetry={() => void statsQuery.refetch()}
+        />
       ) : (
         <Row gutter={[16, 16]}>
           <Col xs={12} lg={6}>

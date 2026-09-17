@@ -6,11 +6,13 @@ import {
   Outlet,
   useNavigate,
 } from '@tanstack/react-router';
+import { lazy } from 'react';
 import type { ReactElement } from 'react';
 import type { QueryClient } from '@tanstack/react-query';
-import { Spin } from 'antd';
+import { Button, Result, Space, Spin } from 'antd';
 import type { User } from '@ai-review/shared/api';
 import { fetchMe } from './api/auth';
+import { getErrorMessage } from './parse-response';
 import { AUTH_QUERY_KEY } from './hooks/use-auth';
 import { canAccessPath, firstPermittedAdminPath, hasAdminAccess } from './permissions';
 import { queryClient } from './query-client';
@@ -20,20 +22,54 @@ import { HomePage } from './pages/HomePage';
 import { LoginPage } from './pages/LoginPage';
 import { ProfilePage } from './pages/ProfilePage';
 import { RegisterPage } from './pages/RegisterPage';
-import { AdminOverviewPage } from './pages/admin/AdminOverviewPage';
-import { AdminUsersPage } from './pages/admin/AdminUsersPage';
-import { AdminRolesPage } from './pages/admin/AdminRolesPage';
-import { AdminConfigPage } from './pages/admin/AdminConfigPage';
-import { AdminAiConfigPage } from './pages/admin/AdminAiConfigPage';
-import { AdminToolsPage } from './pages/admin/AdminToolsPage';
-import { AdminInitPage } from './pages/admin/AdminInitPage';
-import { AdminHookPage } from './pages/admin/AdminHookPage';
-import { AdminMetricsPage } from './pages/admin/AdminMetricsPage';
-import { AdminKnowledgePage } from './pages/admin/AdminKnowledgePage';
-import { ReportDetailView } from './views/ReportDetailView';
-import { ReviewListView } from './views/ReviewListView';
-import { RunReviewView } from './views/RunReviewView';
-import { StatisticsView } from './views/StatisticsView';
+
+// —— 方案 11：路由级懒加载 ——
+// 重量级页面（后台管理、统计图表、报告详情/差异、审查列表/运行）按需分包，缩小首屏 bundle；
+// 登录/注册/首页/个人中心保持急切加载以保证首屏即时渲染。
+/* eslint-disable @typescript-eslint/naming-convention -- 懒加载组件须保留 PascalCase 供 JSX/路由使用 */
+const AdminOverviewPage = lazy(() =>
+  import('./pages/admin/AdminOverviewPage').then((m) => ({ default: m.AdminOverviewPage })),
+);
+const AdminUsersPage = lazy(() =>
+  import('./pages/admin/AdminUsersPage').then((m) => ({ default: m.AdminUsersPage })),
+);
+const AdminRolesPage = lazy(() =>
+  import('./pages/admin/AdminRolesPage').then((m) => ({ default: m.AdminRolesPage })),
+);
+const AdminConfigPage = lazy(() =>
+  import('./pages/admin/AdminConfigPage').then((m) => ({ default: m.AdminConfigPage })),
+);
+const AdminAiConfigPage = lazy(() =>
+  import('./pages/admin/AdminAiConfigPage').then((m) => ({ default: m.AdminAiConfigPage })),
+);
+const AdminToolsPage = lazy(() =>
+  import('./pages/admin/AdminToolsPage').then((m) => ({ default: m.AdminToolsPage })),
+);
+const AdminInitPage = lazy(() =>
+  import('./pages/admin/AdminInitPage').then((m) => ({ default: m.AdminInitPage })),
+);
+const AdminHookPage = lazy(() =>
+  import('./pages/admin/AdminHookPage').then((m) => ({ default: m.AdminHookPage })),
+);
+const AdminMetricsPage = lazy(() =>
+  import('./pages/admin/AdminMetricsPage').then((m) => ({ default: m.AdminMetricsPage })),
+);
+const AdminKnowledgePage = lazy(() =>
+  import('./pages/admin/AdminKnowledgePage').then((m) => ({ default: m.AdminKnowledgePage })),
+);
+const ReportDetailView = lazy(() =>
+  import('./views/ReportDetailView').then((m) => ({ default: m.ReportDetailView })),
+);
+const ReviewListView = lazy(() =>
+  import('./views/ReviewListView').then((m) => ({ default: m.ReviewListView })),
+);
+const RunReviewView = lazy(() =>
+  import('./views/RunReviewView').then((m) => ({ default: m.RunReviewView })),
+);
+const StatisticsView = lazy(() =>
+  import('./views/StatisticsView').then((m) => ({ default: m.StatisticsView })),
+);
+/* eslint-enable @typescript-eslint/naming-convention */
 
 type RouterContext = { queryClient: QueryClient };
 
@@ -256,6 +292,27 @@ function NotFound(): ReactElement {
   return <div>404：页面不存在</div>;
 }
 
+/** 路由级错误兜底：懒加载分包失败、beforeLoad 异常等统一呈现，避免白屏 */
+function RouteErrorFallback({ error }: { error: unknown }): ReactElement {
+  return (
+    <div className="route-error-fallback" style={{ maxWidth: 640, margin: '0 auto', padding: 64 }}>
+      <Result
+        status="error"
+        title="页面加载失败"
+        subTitle={getErrorMessage(error)}
+        extra={
+          <Space>
+            <Button type="primary" onClick={() => window.location.reload()}>
+              刷新重试
+            </Button>
+            <Button onClick={() => window.history.back()}>返回上一页</Button>
+          </Space>
+        }
+      />
+    </div>
+  );
+}
+
 export const routeTree = rootRoute.addChildren([
   loginRoute,
   registerRoute,
@@ -285,6 +342,7 @@ export const router = createRouter({
   routeTree,
   context: { queryClient },
   defaultPendingComponent: PendingFallback,
+  defaultErrorComponent: RouteErrorFallback,
 });
 
 function PendingFallback(): ReactElement {

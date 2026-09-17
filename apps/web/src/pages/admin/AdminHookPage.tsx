@@ -1,19 +1,25 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import type { ReactElement } from 'react';
 import { Alert, Button, Card, Skeleton, Typography } from 'antd';
 import { CopyOutlined } from '@ant-design/icons';
 import { fetchHookScript } from '../../api';
-import { describeError } from '../../parse-response';
 import { CardHeading, PageHeader } from '../../components/PageHeader';
+import { ErrorAlert } from '../../components/ErrorAlert';
 
 export function AdminHookPage(): ReactElement {
   const [script, setScript] = useState<string | null>(null);
   const [error, setError] = useState<unknown>(null);
   const [copied, setCopied] = useState(false);
 
-  useEffect(() => {
+  const retry = useCallback((): void => {
+    setError(null);
+    setScript(null);
     fetchHookScript().then(setScript).catch(setError);
   }, []);
+
+  useEffect(() => {
+    retry();
+  }, [retry]);
 
   const handleCopy = async (): Promise<void> => {
     if (script === null) return;
@@ -62,7 +68,7 @@ export function AdminHookPage(): ReactElement {
         }
       >
         {error !== null ? (
-          <Alert type="error" showIcon message="加载失败" description={describeError(error)} />
+          <ErrorAlert error={error} title="加载失败" onRetry={retry} />
         ) : script === null ? (
           <Skeleton active paragraph={{ rows: 4 }} />
         ) : (

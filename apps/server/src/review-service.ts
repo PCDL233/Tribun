@@ -3,7 +3,7 @@ import type { PipelineDeps, PipelineNodeName, ReviewState } from '@ai-review/cor
 import type { ReviewStore } from '@ai-review/db';
 import { severityMeetsThreshold } from '@ai-review/shared';
 import { deriveQualityNotes, deriveSuggestions } from '@ai-review/report';
-import type { ReviewReport, ReviewStageEvent, Severity } from '@ai-review/shared';
+import type { ReviewReport, ReviewStageEvent } from '@ai-review/shared';
 import type { ReviewMetrics } from './metrics.js';
 
 // SSE 事件契约以 shared 为单一事实源，此处转出口供既有调用方使用
@@ -30,7 +30,7 @@ export type StartReviewOptions = {
   repoPath: string;
   mode: 'fast' | 'full';
   /** 阻断阈值，默认 BLOCKER（退出码契约的 BLOCKER 级语义） */
-  blockOn?: Severity;
+  blockOn?: 'BLOCKER' | 'WARNING' | 'NIT';
   /** 发起人用户 id（Web 端数据隔离依据；CLI 直跑路径不传） */
   createdBy?: string;
 };
@@ -51,13 +51,25 @@ export class ReviewService {
   private readonly jobs = new Map<string, StartReviewOptions>();
   private readonly listeners = new Map<string, Set<(event: ReviewStageEvent) => void>>();
   private readonly terminalEvents = new Map<string, ReviewStageEvent>();
+  // —— 方案 13：并发审查上限（信号量 + FIFO 排队），防用户批量触发压垮 LLM 配额与进程 ——
+  private readonly maxConcurrent: number;
+  private running = 0;
+  /** 排队等待者（FIFO）；cancelled 标记的等待者在唤醒时直接跳过（排队期间被取消） */
+  private readonly pending: Array<{
+    reviewId: string;
+    cancelled: boolean;
+    resolve: (granted: boolean) => void;
+  }> = [];
 
   constructor(
     private readonly store: ReviewStore,
     private readonly depsFactory: PipelineDepsFactory,
     private readonly runner: PipelineRunner = runReviewPipeline,
     private readonly metrics?: ReviewMetrics,
-  ) {}
+  ) {
+    const configured = Number(process.env.AI_REVIEW_MAX_CONCURRENT ?? 3);
+    this.maxConcurrent = Number.isFinite(configured) && configured > 0 ? configured : 3;
+  }
 
   /**
    * 触发一次异步审查。
@@ -74,11 +86,18 @@ export class ReviewService {
     return reviewId;
   }
 
-  /** 取消运行中的审查；任务已进入终态时返回 false。 */
+  /** 取消审查；任务已进入终态时返回 false。排队中的任务会立即出队并直接落库为 cancelled。 */
   public cancelReview(reviewId: string): boolean {
     const controller = this.controllers.get(reviewId);
     if (controller === undefined || controller.signal.aborted) return false;
     controller.abort();
+    // 排队中的任务：立即出队并放行 runJob 走取消终态（不占并发槽），SSE 即时收到 cancelled
+    const waiter = this.pending.find((w) => w.reviewId === reviewId);
+    if (waiter !== undefined) {
+      waiter.cancelled = true;
+      this.pending.splice(this.pending.indexOf(waiter), 1);
+      waiter.resolve(false);
+    }
     return true;
   }
 
@@ -92,25 +111,28 @@ export class ReviewService {
     const remembered = this.terminalEvents.get(reviewId);
     if (remembered !== undefined) return remembered;
     try {
-      const report = this.store.getReportDetail(reviewId);
-      const status = report.meta.status ?? 'completed';
-      if (status === 'failed' || status === 'cancelled') {
+      // 方案 14：仅读状态列，避免为晚连接兜底而解析完整报告与 findings
+      const status = this.store.getReportStatus(reviewId);
+      if (status === undefined) return undefined;
+      if (status.status === 'failed' || status.status === 'cancelled') {
         return {
-          type: status,
+          type: status.status,
           reviewId,
-          message: report.meta.errorMessage ?? report.assessment,
+          message: status.errorMessage ?? '审查任务未正常完成。',
         };
       }
+      const blockOn = status.blockOn ?? 'BLOCKER';
+      // 与实时事件同口径：按发起时阈值重算 blocking（PRAISE 不计数，各严重度计数列覆盖全部分布）
+      const blocking =
+        status.blockerCount > 0 ||
+        (blockOn !== 'BLOCKER' && status.warningCount > 0) ||
+        (blockOn === 'NIT' && status.nitCount > 0);
       return {
         type: 'completed',
         reviewId,
-        riskScore: report.meta.riskScore,
-        blockerCount: report.findings.filter(
-          (finding) => finding.severity === 'BLOCKER' && !finding.isFalsePositive,
-        ).length,
-        blocking: report.findings.some((finding) =>
-          severityMeetsThreshold(finding.severity, 'BLOCKER'),
-        ),
+        riskScore: status.riskScore,
+        blockerCount: status.blockerCount,
+        blocking,
       };
     } catch {
       // 运行中的任务尚未落库；订阅者会从实时广播中收到终态事件。
@@ -118,12 +140,13 @@ export class ReviewService {
     }
   }
 
-  /** 使用原审查的仓库与模式创建新任务。 */
+  /** 使用原审查的仓库、模式与阻断阈值创建新任务。 */
   public rerunReview(reviewId: string, createdBy?: string): string {
     const input = this.store.getReviewInput(reviewId);
     return this.startReview({
       repoPath: input.repoPath,
       mode: input.mode,
+      ...(input.blockOn !== null ? { blockOn: input.blockOn } : {}),
       ...(createdBy === undefined ? {} : { createdBy }),
     });
   }
@@ -152,11 +175,78 @@ export class ReviewService {
     }
   }
 
+  /** 申请并发槽位：未达上限立即通过；排队期间被取消时返回 false（不消耗槽位） */
+  private async acquireSlot(reviewId: string): Promise<boolean> {
+    if (this.running < this.maxConcurrent) {
+      this.running += 1;
+      return true;
+    }
+    return new Promise<boolean>((resolve) => {
+      this.pending.push({ reviewId, cancelled: false, resolve });
+    });
+  }
+
+  /** 释放并发槽位并唤醒下一个未取消的排队任务 */
+  private releaseSlot(): void {
+    this.running -= 1;
+    while (this.pending.length > 0) {
+      const next = this.pending.shift();
+      if (next === undefined) break;
+      if (next.cancelled) continue;
+      this.running += 1;
+      next.resolve(true);
+      return;
+    }
+  }
+
+  /** 终态失败/取消：落库降级报告并广播事件（成功与失败共用的失败形状） */
+  private finalizeTerminalFailure(
+    reviewId: string,
+    options: StartReviewOptions,
+    status: 'failed' | 'cancelled',
+    message: string,
+  ): void {
+    this.metrics?.recordFailed();
+    const failureReport: ReviewReport = {
+      meta: {
+        reviewId,
+        repoPath: options.repoPath,
+        branch: '—',
+        model: '未完成',
+        mode: options.mode,
+        status,
+        errorMessage: message,
+        riskScore: 0,
+        durationMs: 0,
+        tokenUsed: 0,
+      },
+      summary: status === 'cancelled' ? '审查任务已取消。' : '审查任务执行失败。',
+      findings: [],
+      qualityNotes: [],
+      suggestions: [],
+      assessment: message,
+      degradedToStatic: [],
+    };
+    this.store.saveReport(failureReport, options.createdBy, {
+      errorMessage: message,
+      ...(options.blockOn === undefined ? {} : { blockOn: options.blockOn }),
+    });
+    this.emit({ type: status, reviewId, message });
+  }
+
   private async runJob(
     reviewId: string,
     options: StartReviewOptions,
     controller: AbortController,
   ): Promise<void> {
+    const granted = await this.acquireSlot(reviewId);
+    if (!granted) {
+      // 排队期间被取消：立即落库 cancelled 并广播（不经过流水线、不占用并发槽）
+      this.finalizeTerminalFailure(reviewId, options, 'cancelled', '审查已取消');
+      this.controllers.delete(reviewId);
+      this.jobs.delete(reviewId);
+      return;
+    }
     try {
       const deps = this.depsFactory(options.repoPath, options.mode);
       const state = await this.runner(deps, {
@@ -181,10 +271,14 @@ export class ReviewService {
         throw new DOMException('The review was cancelled', 'AbortError');
       }
       const report = await this.buildReport(reviewId, options, deps, state);
-      this.store.saveReport(report, options.createdBy, { diffText: state.rawDiff });
+      this.store.saveReport(report, options.createdBy, {
+        diffText: state.rawDiff,
+        ...(options.blockOn === undefined ? {} : { blockOn: options.blockOn }),
+      });
       this.metrics?.recordCompleted(report);
+      // 与存储列同口径（含流水线阶段标记的误报），SSE 实时与晚连接重放数值一致
       const blockerCount = report.findings.filter(
-        (finding) => finding.severity === 'BLOCKER' && !finding.isFalsePositive,
+        (finding) => finding.severity === 'BLOCKER',
       ).length;
       this.emit({
         type: 'completed',
@@ -199,33 +293,11 @@ export class ReviewService {
       const cancelled =
         controller.signal.aborted || (e instanceof DOMException && e.name === 'AbortError');
       const message = cancelled ? '审查已取消' : e instanceof Error ? e.message : String(e);
-      this.metrics?.recordFailed();
-      const status = cancelled ? ('cancelled' as const) : ('failed' as const);
-      const failureReport: ReviewReport = {
-        meta: {
-          reviewId,
-          repoPath: options.repoPath,
-          branch: '—',
-          model: '未完成',
-          mode: options.mode,
-          status,
-          errorMessage: message,
-          riskScore: 0,
-          durationMs: 0,
-          tokenUsed: 0,
-        },
-        summary: cancelled ? '审查任务已取消。' : '审查任务执行失败。',
-        findings: [],
-        qualityNotes: [],
-        suggestions: [],
-        assessment: message,
-        degradedToStatic: [],
-      };
-      this.store.saveReport(failureReport, options.createdBy, { errorMessage: message });
-      this.emit({ type: cancelled ? 'cancelled' : 'failed', reviewId, message });
+      this.finalizeTerminalFailure(reviewId, options, cancelled ? 'cancelled' : 'failed', message);
     } finally {
       this.controllers.delete(reviewId);
       this.jobs.delete(reviewId);
+      this.releaseSlot();
     }
   }
 

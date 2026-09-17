@@ -18,8 +18,9 @@ import type { AdminConfig } from '@ai-review/shared/api';
 import { AdminConfigSchema } from '@ai-review/shared/api';
 import { MODEL_PROVIDER_LIST, MODEL_PROVIDERS } from '@ai-review/shared/api';
 import { fetchAdminConfig, updateAdminConfig } from '../../api';
-import { describeError } from '../../parse-response';
 import { CardHeading, PageHeader } from '../../components/PageHeader';
+import { LoadErrorState } from '../../components/ErrorAlert';
+import { useNotify } from '../../hooks/use-notify';
 
 /** Provider 下拉选项直接取自 shared 目录，与配置 schema 同源，避免双份维护。 */
 const PROVIDER_OPTIONS = MODEL_PROVIDER_LIST.map((info) => ({
@@ -31,6 +32,7 @@ export function AdminAiConfigPage(): ReactElement {
   const [form] = Form.useForm<AdminConfig>();
   const [saved, setSaved] = useState(false);
   const queryClient = useQueryClient();
+  const { notifyError } = useNotify();
   const configQuery = useQuery({ queryKey: ['admin-config'], queryFn: fetchAdminConfig });
   // 当前 Provider 决定“推荐模型”预设列表；模型字段仍可自由输入。
   const provider =
@@ -43,11 +45,24 @@ export function AdminAiConfigPage(): ReactElement {
       setSaved(true);
       void queryClient.invalidateQueries({ queryKey: ['admin-config'] });
     },
+    onError: (e) => notifyError(e, { title: '保存配置失败' }),
   });
 
   useEffect(() => {
     if (configQuery.data !== undefined) form.setFieldsValue(configQuery.data);
   }, [configQuery.data, form]);
+
+  if (configQuery.isError) {
+    return (
+      <div className="page-stack">
+        <LoadErrorState
+          error={configQuery.error}
+          title="配置加载失败"
+          onRetry={() => void configQuery.refetch()}
+        />
+      </div>
+    );
+  }
 
   const handleProviderChange = (provider: string): void => {
     const current = form.getFieldValue(['llm', 'baseUrl']) as string | undefined;
@@ -79,15 +94,6 @@ export function AdminAiConfigPage(): ReactElement {
         title="AI 模型配置"
         description="配置审查使用的模型服务。API Key 提交后会被安全掩码，Base URL 支持自定义端点或留空使用默认值。"
       />
-      {saveMutation.isError && (
-        <Alert
-          type="error"
-          showIcon
-          message="保存失败"
-          description={describeError(saveMutation.error)}
-          closable
-        />
-      )}
       {saved && (
         <Alert
           type="success"

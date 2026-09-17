@@ -15,11 +15,13 @@ import {
 } from 'antd';
 import { DatabaseOutlined, ReloadOutlined } from '@ant-design/icons';
 import { fetchKnowledgeStatus, reindexKnowledge } from '../../api';
-import { describeError } from '../../parse-response';
 import { CardHeading, PageHeader } from '../../components/PageHeader';
+import { ErrorAlert } from '../../components/ErrorAlert';
+import { useNotify } from '../../hooks/use-notify';
 
 export function AdminKnowledgePage(): ReactElement {
   const queryClient = useQueryClient();
+  const { notifyError } = useNotify();
   const statusQuery = useQuery({
     queryKey: ['admin-knowledge'],
     queryFn: fetchKnowledgeStatus,
@@ -28,6 +30,7 @@ export function AdminKnowledgePage(): ReactElement {
   const reindexMutation = useMutation({
     mutationFn: reindexKnowledge,
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: ['admin-knowledge'] }),
+    onError: (e) => notifyError(e, { title: '重建索引失败' }),
   });
 
   if (statusQuery.isPending)
@@ -38,11 +41,10 @@ export function AdminKnowledgePage(): ReactElement {
     );
   if (statusQuery.isError)
     return (
-      <Alert
-        type="error"
-        showIcon
-        message="知识库状态读取失败"
-        description={describeError(statusQuery.error)}
+      <ErrorAlert
+        error={statusQuery.error}
+        title="知识库状态读取失败"
+        onRetry={() => void statusQuery.refetch()}
       />
     );
   const status = statusQuery.data;
@@ -66,15 +68,6 @@ export function AdminKnowledgePage(): ReactElement {
           </Button>
         }
       />
-      {reindexMutation.isError && (
-        <Alert
-          type="error"
-          showIcon
-          message="重建任务提交失败"
-          description={describeError(reindexMutation.error)}
-          closable
-        />
-      )}
       <Card className="surface-card" title={<CardHeading title="索引概况" />}>
         <Space size="large" wrap>
           <Statistic

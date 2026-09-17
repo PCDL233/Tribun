@@ -253,6 +253,19 @@ pnpm --filter @ai-review/web build
 pnpm exec ai-review server --port 8080 --web-dist apps/web/dist
 ```
 
+#### 服务端环境变量
+
+| 变量                         | 默认值       | 说明                                                                                                  |
+| ---------------------------- | ------------ | ----------------------------------------------------------------------------------------------------- |
+| `AI_REVIEW_ALLOWED_ROOTS`    | `cwd`        | 允许发起审查的仓库根目录白名单，多个用路径分隔符分隔（Windows `;` / POSIX `:`）；越界路径一律 400     |
+| `AI_REVIEW_MAX_CONCURRENT`   | `3`          | 并行审查任务上限（信号量排队，防压垮 LLM 配额）                                                       |
+| `AI_REVIEW_COOKIE_SECURE`    | 关           | `true` 时强制会话 Cookie 携带 `Secure`（NODE_ENV=production 下自动开启）                               |
+| `AI_REVIEW_ALLOW_REGISTER`   | 关           | `true` 时放开开放注册；缺省仅在无任何用户时允许（首个管理员引导后自动关闭）                            |
+| `AI_REVIEW_TRUST_PROXY`      | 关           | 反向代理（nginx 等）部署时开启：限流改用 `X-Forwarded-For` 末值识别真实客户端 IP，避免全员共享代理 IP 的限流桶 |
+| `AI_REVIEW_API_KEY`          | 无           | 模型 API Key，配合配置文件的 `${AI_REVIEW_API_KEY}` 引用；切勿写入仓库                                 |
+
+Docker 镜像默认 `NODE_ENV=production`，会话 Cookie 自动启用 `Secure`；若在 http 反向代理后部署，请同时设置 `AI_REVIEW_COOKIE_SECURE=false` 并配合 `AI_REVIEW_TRUST_PROXY=true`。
+
 ### `ai-review mcp` —— 对外开放工具
 
 以 stdio MCP Server 暴露静态分析工具。客户端配置示例：

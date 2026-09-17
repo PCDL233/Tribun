@@ -19,8 +19,9 @@ import {
 import type { AdminConfig } from '@ai-review/shared/api';
 import { AdminConfigSchema } from '@ai-review/shared/api';
 import { fetchAdminConfig, updateAdminConfig } from '../../api';
-import { describeError } from '../../parse-response';
 import { CardHeading, PageHeader } from '../../components/PageHeader';
+import { ErrorAlert } from '../../components/ErrorAlert';
+import { useNotify } from '../../hooks/use-notify';
 
 const TOOL_OPTIONS = [
   { label: 'AST 解析', value: 'ast_parse' },
@@ -33,6 +34,7 @@ export function AdminConfigPage(): ReactElement {
   const [form] = Form.useForm<AdminConfig>();
   const [saved, setSaved] = useState(false);
   const queryClient = useQueryClient();
+  const { notifyError } = useNotify();
   const configQuery = useQuery({ queryKey: ['admin-config'], queryFn: fetchAdminConfig });
   const saveMutation = useMutation({
     mutationFn: (config: AdminConfig) => updateAdminConfig(config),
@@ -41,6 +43,7 @@ export function AdminConfigPage(): ReactElement {
       setSaved(true);
       void queryClient.invalidateQueries({ queryKey: ['admin-config'] });
     },
+    onError: (e) => notifyError(e, { title: '保存配置失败' }),
   });
 
   useEffect(() => {
@@ -55,11 +58,10 @@ export function AdminConfigPage(): ReactElement {
     );
   if (configQuery.isError) {
     return (
-      <Alert
-        type="error"
-        showIcon
-        message="配置加载失败"
-        description={describeError(configQuery.error)}
+      <ErrorAlert
+        error={configQuery.error}
+        title="配置加载失败"
+        onRetry={() => void configQuery.refetch()}
       />
     );
   }
@@ -85,15 +87,6 @@ export function AdminConfigPage(): ReactElement {
         title="系统配置"
         description="管理审查模式、静态分析规则、RAG 知识库与报告输出策略。"
       />
-      {saveMutation.isError && (
-        <Alert
-          type="error"
-          showIcon
-          message="保存失败"
-          description={describeError(saveMutation.error)}
-          closable
-        />
-      )}
       {saved && (
         <Alert
           type="success"
