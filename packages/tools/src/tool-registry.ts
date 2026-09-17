@@ -1,8 +1,9 @@
-import type { CodeContext, Finding } from '@ai-review/shared';
+import type { CodeContext, CustomRule, Finding } from '@ai-review/shared';
 import { complexityFindings } from './complexity.js';
 import { scanSecrets } from './secret-scan.js';
 import { dependencyFindings } from './dependency-scan.js';
 import { astFindings } from './ast-parse.js';
+import { runCustomRules } from './custom-rule.js';
 
 /**
  * 进程内静态分析工具（方案 3.4 工具总线）。
@@ -45,12 +46,34 @@ export class ToolRegistry {
 export const DEFAULT_COMPLEXITY_THRESHOLD = 15;
 
 /**
- * 装配默认工具集：AST、复杂度、密钥与离线依赖 advisory 检查。
- * @param options 复杂度阈值等工具参数
+ * 解析实际启用的静态工具列表：配置了启用规则时，无论 enabledTools 是否显式包含
+ * custom_rule_check，都自动并入——规则随配置保存即生效，无需手工开启（整体停用请关闭全部规则）。
+ * @param enabledTools 配置声明的启用工具
+ * @param customRules 全部自定义规则
+ * @returns 实际生效的工具名列表
+ */
+export function resolveEnabledTools(
+  enabledTools: readonly string[],
+  customRules: readonly CustomRule[],
+): string[] {
+  const hasEnabledRules = customRules.some((rule) => rule.enabled);
+  if (!hasEnabledRules || enabledTools.includes('custom_rule_check')) {
+    return [...enabledTools];
+  }
+  return [...enabledTools, 'custom_rule_check'];
+}
+
+/**
+ * 装配默认工具集：AST、复杂度、密钥、离线依赖 advisory 检查与用户自定义规则。
+ * @param options 复杂度阈值、自定义规则等工具参数
  * @returns 含默认工具的注册表
  */
-export function buildDefaultRegistry(options?: { complexityThreshold?: number }): ToolRegistry {
+export function buildDefaultRegistry(options?: {
+  complexityThreshold?: number;
+  customRules?: readonly CustomRule[];
+}): ToolRegistry {
   const threshold = options?.complexityThreshold ?? DEFAULT_COMPLEXITY_THRESHOLD;
+  const customRules = options?.customRules ?? [];
   const registry = new ToolRegistry();
   registry.register({
     name: 'ast_parse',
@@ -72,5 +95,13 @@ export function buildDefaultRegistry(options?: { complexityThreshold?: number })
     description: 'Check changed package manifests against the bundled offline advisory set.',
     run: (context) => dependencyFindings(context.files),
   });
+  // 用户自定义规则：配置了启用规则才注册（否则 custom_rule_check 在 enabledTools 中为空操作）
+  if (customRules.some((rule) => rule.enabled)) {
+    registry.register({
+      name: 'custom_rule_check',
+      description: 'Apply user-defined custom review rules (regex) to changed lines, staged content and function snippets.',
+      run: (context) => runCustomRules(context.files, customRules),
+    });
+  }
   return registry;
 }

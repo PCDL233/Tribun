@@ -28,6 +28,7 @@ const TOOL_OPTIONS = [
   { label: '复杂度检查', value: 'complexity_check' },
   { label: '密钥扫描', value: 'secret_scan' },
   { label: '依赖漏洞扫描', value: 'dependency_scan' },
+  { label: '自定义规则检查', value: 'custom_rule_check' },
 ];
 
 export function AdminConfigPage(): ReactElement {

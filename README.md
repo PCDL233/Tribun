@@ -9,6 +9,7 @@
 - **多 Agent 并行审查**：正确性 / 安全 / 性能三个维度经 LangGraph.js fan-out 并行审查，交叉验证抑制幻觉；低置信度 BLOCKER 支持自愈回退，最多 3 轮。
 - **确定性优先**：密钥扫描（CWE-798/321）、圈复杂度和 AST 解析等工具先行，能由确定性工具判断的问题不重复交给 LLM。
 - **多语言上下文提取**：JS/TS 使用 ts-morph，Python/Go/Java 使用 Tree-sitter 官方语法包，按函数边界裁剪上下文；解析失败时降级为行级窗口，不阻塞流水线。
+- **用户自定义审查规则**：管理员可在后台定义正则规则（名称/严重度/文件过滤/匹配范围），在 static 阶段以确定性工具 `custom_rule_check` 执行，支持在线试跑；保存后下一次审查即生效（服务端热重读配置，无需重启）。
 - **风险规划分流**：按 0–100 风险评分选择深度审查、快速审查或仅静态分析；全流程有 token 硬预算，预算耗尽时自动降级并在报告中标注。
 - **审查缓存**：按 agent、prompt 版本和代码内容计算哈希，相同代码块可跨审查复用发现，避免重复消耗 LLM。
 - **RAG 知识库**：按 AST/文档边界切块，使用 LanceDB 向量检索与 MiniSearch BM25，经 RRF 融合后注入审查上下文；索引按块级内容哈希增量更新。
@@ -314,8 +315,23 @@ rag:
   topK: 5
 
 staticAnalysis:
-  enabledTools: [ast_parse, complexity_check, secret_scan, dependency_scan]
+  enabledTools: [ast_parse, complexity_check, secret_scan, dependency_scan, custom_rule_check]
   complexityThreshold: 15
+
+# 用户自定义审查规则（管理员在后台维护，随配置生效；匹配范围：added 新增行 / staged 文件全文 / snippet 函数片段）
+# 保存后下一次审查立即生效（服务端热重读，无需重启）；存在启用规则时 custom_rule_check 自动参与，无需在 enabledTools 单独开启。
+# pattern 为正则源码（≤1024 字符），非法表达式在保存/试跑时即被拒绝；规则在审查路径逐行执行，请避免灾难性回溯的正则。
+customRules:
+  - name: no-todo
+    description: 禁止提交遗留的 TODO/FIXME 标记
+    pattern: '\b(TODO|FIXME)\b'
+    flags: i
+    severity: WARNING
+    message: 检测到遗留的 TODO 标记
+    suggestion: 清理注释或创建跟踪任务后删除
+    filePatterns: ['src/**']
+    matchScope: [added]
+    enabled: true
 
 report:
   format: markdown # markdown | html | json
@@ -379,7 +395,8 @@ Ollama 的默认模型回退为 `qwen3-coder:30b`，可用 `AI_REVIEW_OLLAMA_MOD
 1. **系统概览**：查看用户数、管理员数、审查数、发现数、Token 消耗、缓存摘要和最近失败记录。
 2. **用户管理**：查看用户列表，修改角色/状态，重置密码或删除其他用户。
 3. **配置管理**：读取并保存 `.ai-review.yml`；API Key 在页面中以 `********` 掩码显示，提交掩码值会保留原密钥。
-4. **知识库管理**：查看索引状态并异步触发 RAG 增量重建。
+4. **自定义规则**：查看、新增、编辑、删除和启停自定义审查规则，并可粘贴示例 diff / 源码在线试跑验证正则命中。
+5. **知识库管理**：查看索引状态并异步触发 RAG 增量重建。
 
 ## HTTP API
 
@@ -424,6 +441,9 @@ Ollama 的默认模型回退为 `qwen3-coder:30b`，可用 `AI_REVIEW_OLLAMA_MOD
 | `/api/admin/config`                   | PUT    | 更新项目配置；`apiKey: "********"` 保留原密钥 |
 | `/api/admin/knowledge`                | GET    | 查看知识库索引状态                            |
 | `/api/admin/knowledge/reindex`        | POST   | 异步接受知识库增量重建任务，返回 `202`        |
+| `/api/admin/rules`                    | GET    | 自定义审查规则列表                            |
+| `/api/admin/rules`                    | PUT    | 整体保存自定义审查规则（随配置持久化）        |
+| `/api/admin/rules/test`               | POST   | 试跑规则：`{ rule, sampleDiffText?, sampleSource? }` 返回命中行 |
 | `/metrics`                            | GET    | Prometheus 文本格式指标                       |
 
 SSE 事件通过 `event` + JSON `data` 发送：

@@ -583,6 +583,9 @@ importers:
       '@modelcontextprotocol/sdk':
         specifier: 'catalog:'
         version: 1.30.0(@cfworker/json-schema@4.1.1)(zod@4.6.2)
+      picomatch:
+        specifier: 'catalog:'
+        version: 4.0.7
       ts-morph:
         specifier: 'catalog:'
         version: 28.0.0

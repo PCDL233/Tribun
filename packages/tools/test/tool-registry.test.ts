@@ -1,6 +1,6 @@
-import type { CodeContext, Finding } from '@ai-review/shared';
+import type { CodeContext, CustomRule, Finding } from '@ai-review/shared';
 import { describe, expect, it } from 'vitest';
-import { buildDefaultRegistry, ToolRegistry } from '../src/index.js';
+import { buildDefaultRegistry, resolveEnabledTools, ToolRegistry } from '../src/index.js';
 
 function makeContext(paths: string[]): CodeContext {
   return {
@@ -72,5 +72,59 @@ describe('ToolRegistry', () => {
       'dependency_scan',
       'secret_scan',
     ]);
+  });
+
+  it('registers custom_rule_check when enabled rules exist and runs them', () => {
+    const rule: CustomRule = {
+      name: 'no-todo',
+      description: '',
+      pattern: 'TODO',
+      flags: '',
+      severity: 'WARNING',
+      message: '',
+      suggestion: '',
+      filePatterns: [],
+      matchScope: ['added'],
+      enabled: true,
+    };
+    const registry = buildDefaultRegistry({ customRules: [rule] });
+    expect(registry.list()).toContain('custom_rule_check');
+    const context = makeContext(['a.ts']);
+    // stagedContent 与 added 行均为 'x'，不命中 TODO
+    expect(registry.runAll(context, ['custom_rule_check'])).toEqual([]);
+  });
+});
+
+describe('resolveEnabledTools', () => {
+  const enabledRule: CustomRule = {
+    name: 'r',
+    description: '',
+    pattern: 'x',
+    flags: '',
+    severity: 'NIT',
+    message: '',
+    suggestion: '',
+    filePatterns: [],
+    matchScope: ['added'],
+    enabled: true,
+  };
+  const disabledRule = { ...enabledRule, enabled: false };
+
+  it('auto-appends custom_rule_check when enabled rules exist', () => {
+    expect(resolveEnabledTools(['ast_parse'], [enabledRule])).toEqual([
+      'ast_parse',
+      'custom_rule_check',
+    ]);
+  });
+
+  it('does not duplicate custom_rule_check when already listed', () => {
+    expect(resolveEnabledTools(['custom_rule_check'], [enabledRule])).toEqual([
+      'custom_rule_check',
+    ]);
+  });
+
+  it('does not append when all rules are disabled or none exist', () => {
+    expect(resolveEnabledTools(['ast_parse'], [disabledRule])).toEqual(['ast_parse']);
+    expect(resolveEnabledTools(['ast_parse'], [])).toEqual(['ast_parse']);
   });
 });

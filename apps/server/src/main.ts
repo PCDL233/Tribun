@@ -10,7 +10,7 @@ import { runReviewPipeline } from '@ai-review/core';
 import type { PipelineDeps } from '@ai-review/core';
 import { AiReviewConfigSchema, loadConfig } from '@ai-review/shared';
 import type { AiReviewConfig } from '@ai-review/shared';
-import { buildDefaultRegistry } from '@ai-review/tools';
+import { buildDefaultRegistry, resolveEnabledTools } from '@ai-review/tools';
 import { AvatarStore } from './avatar.js';
 import { buildApp } from './app.js';
 import { createStoreReviewCache } from './cache.js';
@@ -61,13 +61,38 @@ function createPipelineDeps(
     providers: createConfiguredProviders(config),
     registry: buildDefaultRegistry({
       complexityThreshold: config.staticAnalysis.complexityThreshold,
+      customRules: config.customRules,
     }),
-    enabledTools: config.staticAnalysis.enabledTools,
+    enabledTools: resolveEnabledTools(config.staticAnalysis.enabledTools, config.customRules),
     ragTopK: config.rag.topK,
     budget: new TokenBudget(config.llm.maxTokensPerReview),
     modelName:
       config.llm.provider === 'mock' ? 'mock + 静态分析' : `${config.llm.model} + 静态分析`,
     mode,
+  };
+}
+
+/** 可注入的配置读取器：每次调用重读配置文件，读取/校验失败时返回上次有效配置（热生效语义）。 */
+export type LiveConfigReader = () => AiReviewConfig;
+
+/**
+ * 创建配置热重读器（管理后台保存配置/规则后，下一次审查自动生效，无需重启服务）。
+ * @param configPath 配置文件路径
+ * @param fallback 启动时加载的初始配置（文件缺失/读取失败时的兜底）
+ * @returns 每次调用返回最新有效配置的读取器
+ */
+export function createLiveConfigReader(
+  configPath: string,
+  fallback: AiReviewConfig,
+): LiveConfigReader {
+  let live = fallback;
+  return () => {
+    try {
+      if (existsSync(configPath)) live = loadConfig(configPath);
+    } catch {
+      // 保留上次有效配置，避免配置写入瞬间的临时文件状态拖垮审查
+    }
+    return live;
   };
 }
 
@@ -88,9 +113,17 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
   users.backfillDefaultRoles();
   const metrics = createReviewMetrics();
   const reviewCache = createStoreReviewCache(store);
+  // 配置热重读：管理后台保存配置/自定义规则后，下一次审查自动生效，无需重启服务
+  const readLiveConfig = createLiveConfigReader(configPath, config);
   const service = new ReviewService(
     store,
-    (repoPath, mode) => ({ ...createPipelineDeps(repoPath, mode, config, knowledge), reviewCache }),
+    (repoPath, mode) => {
+      const liveConfig = readLiveConfig();
+      return {
+        ...createPipelineDeps(repoPath, mode, liveConfig, knowledge),
+        reviewCache,
+      };
+    },
     runReviewPipeline,
     metrics,
   );

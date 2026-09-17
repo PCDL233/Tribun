@@ -23,8 +23,15 @@ describe('canAccessPath', () => {
   it('未授权路径仍拒绝访问', () => {
     expect(canAccessPath(DEFAULT_USER_PERMISSIONS, '/admin')).toBe(false);
     expect(canAccessPath(DEFAULT_USER_PERMISSIONS, '/admin/users')).toBe(false);
+    expect(canAccessPath(DEFAULT_USER_PERMISSIONS, '/admin/rules')).toBe(false);
     expect(canAccessPath(DEFAULT_USER_PERMISSIONS, '/unknown')).toBe(false);
     expect(canAccessPath(['/reviews'], '/reviewsx')).toBe(false);
+  });
+
+  it('自定义规则页需显式授权（含动态子路径前缀规则）', () => {
+    expect(canAccessPath(['/admin/rules'], '/admin/rules')).toBe(true);
+    expect(canAccessPath(['/admin'], '/admin/rules')).toBe(true);
+    expect(canAccessPath(['/admin/rules'], '/admin')).toBe(false);
   });
 
   it("'*' 恒允许访问任意路径", () => {

@@ -2,7 +2,11 @@ import { z } from 'zod';
 import {
   AdminCreateUserSchema,
   AdminOverviewResponseSchema,
+  AdminRulesResponseSchema,
+  AdminRulesUpdateSchema,
   AssignRolesSchema,
+  CustomRuleTestRequestSchema,
+  CustomRuleTestResultSchema,
   ResetPasswordResponseSchema,
   RoleInputSchema,
   RoleListResponseSchema,
@@ -13,6 +17,9 @@ import type {
   AdminCreateUserInput,
   AdminOverview,
   AdminUserPatch,
+  CustomRule,
+  CustomRuleTestRequest,
+  CustomRuleTestResult,
   Role,
   RoleInput,
   User,
@@ -126,4 +133,33 @@ export async function fetchAdminOverview(): Promise<AdminOverview> {
     await fetch(`${API_BASE}/overview`),
   );
   return body.overview;
+}
+
+/** 自定义审查规则列表 */
+export async function fetchCustomRules(): Promise<CustomRule[]> {
+  const body = await parseResponse(AdminRulesResponseSchema, await fetch(`${API_BASE}/rules`));
+  return body.rules;
+}
+
+/** 保存自定义审查规则（整体替换） */
+export async function updateCustomRules(rules: CustomRule[]): Promise<CustomRule[]> {
+  const payload = AdminRulesUpdateSchema.parse({ rules });
+  const response = await fetch(`${API_BASE}/rules`, {
+    method: 'PUT',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  const body = await parseResponse(AdminRulesResponseSchema, response);
+  return body.rules;
+}
+
+/** 试跑自定义审查规则（返回在示例输入上的命中行） */
+export async function testCustomRule(request: CustomRuleTestRequest): Promise<CustomRuleTestResult> {
+  const payload = CustomRuleTestRequestSchema.parse(request);
+  const response = await fetch(`${API_BASE}/rules/test`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  return parseResponse(CustomRuleTestResultSchema, response);
 }

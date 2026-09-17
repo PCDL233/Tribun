@@ -14,6 +14,7 @@ import {
   SunOutlined,
   TeamOutlined,
   ToolOutlined,
+  UnorderedListOutlined,
 } from '@ant-design/icons';
 import { Button, Layout, Menu, Space, Typography } from 'antd';
 import { BrandMark } from '../components/Brand';
@@ -27,6 +28,8 @@ function pageTitle(pathname: string): string {
       return '用户管理';
     case '/admin/roles':
       return '角色管理';
+    case '/admin/rules':
+      return '自定义审查规则';
     case '/admin/ai':
       return 'AI 模型配置';
     case '/admin/config':
@@ -64,6 +67,9 @@ export function AdminLayout(): ReactElement {
     ...(can('/admin/ai') ? [{ key: '/admin/ai', label: 'AI 模型', icon: <RobotOutlined /> }] : []),
     ...(can('/admin/config')
       ? [{ key: '/admin/config', label: '系统配置', icon: <SettingOutlined /> }]
+      : []),
+    ...(can('/admin/rules')
+      ? [{ key: '/admin/rules', label: '自定义规则', icon: <UnorderedListOutlined /> }]
       : []),
     ...(can('/admin/knowledge')
       ? [{ key: '/admin/knowledge', label: '知识库', icon: <BookOutlined /> }]

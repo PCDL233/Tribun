@@ -65,4 +65,47 @@ describe('loadConfig', () => {
     writeFileSync(path, 'llm:\n  provider: anthropic\n  apiKey: ${AI_REVIEW_TEST_KEY}\n');
     expect(loadConfig(path).llm.apiKey).toBe('sk-live');
   });
+
+  it('parses custom review rules with defaults', () => {
+    const path = join(dir, '.ai-review.yml');
+    writeFileSync(
+      path,
+      [
+        'customRules:',
+        '  - name: no-todo',
+        '    description: Forbid leftover TODO markers.',
+        '    pattern: \\bTODO\\b',
+        '    flags: i',
+        '    severity: WARNING',
+        '    filePatterns:',
+        '      - src/**',
+        '    matchScope:',
+        '      - added',
+        '      - snippet',
+        '',
+      ].join('\n'),
+    );
+    const cfg = loadConfig(path);
+    expect(cfg.customRules).toHaveLength(1);
+    const rule = cfg.customRules[0];
+    expect(rule).toMatchObject({
+      name: 'no-todo',
+      pattern: '\\bTODO\\b',
+      flags: 'i',
+      severity: 'WARNING',
+      message: '',
+      enabled: true,
+      matchScope: ['added', 'snippet'],
+    });
+    expect(rule.cweId).toBeUndefined();
+    // 默认启用工具集应包含 custom_rule_check
+    expect(cfg.staticAnalysis.enabledTools).toContain('custom_rule_check');
+  });
+
+  it('rejects custom rules with invalid regex flags', () => {
+    const path = join(dir, '.ai-review.yml');
+    writeFileSync(path, 'customRules:\n  - name: bad\n    pattern: x\n    flags: z\n');
+    expect(() => loadConfig(path)).toThrow(ConfigError);
+    expect(() => loadConfig(path)).toThrow(/customRules\.0\.flags/);
+  });
 });

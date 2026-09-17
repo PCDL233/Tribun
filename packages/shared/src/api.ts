@@ -1,12 +1,16 @@
 import { z } from 'zod';
 import { FindingSchema } from './finding.js';
-import { AiReviewConfigSchema } from './config-schema.js';
+import { AiReviewConfigSchema, CustomRuleSchema } from './config-schema.js';
 import { ReviewReportSchema } from './report.js';
+import { CUSTOM_RULE_MATCH_SCOPES } from './config-schema.js';
 
 // 认证/用户契约无 node 依赖，随 api 子路径一并供浏览器端消费
 export * from './auth.js';
 export { FindingSchema } from './finding.js';
 export type { Finding } from './finding.js';
+// 自定义规则 schema 与匹配范围枚举：供管理后台规则表单与试跑面板消费
+export { CustomRuleSchema, CUSTOM_RULE_MATCH_SCOPES } from './config-schema.js';
+export type { CustomRule, CustomRuleMatchScope } from './config-schema.js';
 // 模型服务商目录同样无 node 依赖，供管理后台页面经浏览器安全子路径导入
 export * from './model-catalog.js';
 
@@ -213,3 +217,39 @@ export const KnowledgeStatusSchema = z.object({
 export type KnowledgeStatus = z.infer<typeof KnowledgeStatusSchema>;
 export const KnowledgeStatusResponseSchema = z.object({ knowledge: KnowledgeStatusSchema });
 export const KnowledgeReindexResponseSchema = z.object({ accepted: z.boolean() });
+
+/** —— 自定义审查规则（admin）—— */
+
+/** GET /api/admin/rules 与 PUT /api/admin/rules 响应体 */
+export const AdminRulesResponseSchema = z.object({ rules: z.array(CustomRuleSchema) });
+export type AdminRulesResponse = z.infer<typeof AdminRulesResponseSchema>;
+
+/** PUT /api/admin/rules 请求体（整体替换规则列表） */
+export const AdminRulesUpdateSchema = z.object({ rules: z.array(CustomRuleSchema) });
+export type AdminRulesUpdate = z.infer<typeof AdminRulesUpdateSchema>;
+
+/**
+ * POST /api/admin/rules/test 入参：待试跑的规则 + 示例输入。
+ * added 范围从 sampleDiffText 的 + 行取；staged/snippet 范围对 sampleSource 逐行匹配。
+ */
+export const CustomRuleTestRequestSchema = z.object({
+  rule: CustomRuleSchema,
+  /** 用于 added 范围试跑的 unified diff 文本（仅取新增行） */
+  sampleDiffText: z.string().default(''),
+  /** 用于 staged/snippet 范围试跑的源码全文 */
+  sampleSource: z.string().default(''),
+});
+export type CustomRuleTestRequest = z.infer<typeof CustomRuleTestRequestSchema>;
+
+/** POST /api/admin/rules/test 响应体：规则在示例输入上的命中行 */
+export const CustomRuleTestResultSchema = z.object({
+  matches: z.array(
+    z.object({
+      scope: z.enum(CUSTOM_RULE_MATCH_SCOPES),
+      /** 命中行号（1 基）；snippet 无 AST 签名时相对片段起始行 */
+      line: z.number().int().nonnegative(),
+      text: z.string(),
+    }),
+  ),
+});
+export type CustomRuleTestResult = z.infer<typeof CustomRuleTestResultSchema>;

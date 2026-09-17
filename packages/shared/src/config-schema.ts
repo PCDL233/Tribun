@@ -1,6 +1,46 @@
 import { z } from 'zod';
 import { MODEL_PROVIDER_IDS } from './model-catalog.js';
 
+/** 自定义规则的匹配范围：变更新增行 / 暂存文件全文 / 变更函数源码片段 */
+export const CUSTOM_RULE_MATCH_SCOPES = ['added', 'staged', 'snippet'] as const;
+export type CustomRuleMatchScope = (typeof CUSTOM_RULE_MATCH_SCOPES)[number];
+
+/**
+ * 用户自定义代码审查规则（管理员在管理后台维护，随 .ai-review.yml 生效）。
+ * 规则是确定性静态检查：正则命中即产出 Finding（agent=static），
+ * 经 custom_rule_check 工具在流水线 static 阶段执行。
+ * 该 schema 保持浏览器安全（不引用 node:fs），供配置、API 契约与前端表单共享。
+ */
+export const CustomRuleSchema = z.object({
+  /** 规则名（在发现标题中展示；建议保持唯一） */
+  name: z.string().min(1),
+  /** 规则说明（作为发现的描述文案） */
+  description: z.string().default(''),
+  /** 正则表达式源码；命中即触发。仅允许 JS 正则支持的 flag 子集 */
+  pattern: z.string().min(1).max(1024),
+  /** 正则 flag（如 i / m / s）；非法 flag 会被规则引擎忽略并跳过该规则 */
+  flags: z
+    .string()
+    .max(8)
+    .regex(/^[dgimsuvy]*$/, 'only JS regex flags (dgimsuvy) are allowed')
+    .default(''),
+  /** 触发严重度（规则不产出 PRAISE） */
+  severity: z.enum(['BLOCKER', 'WARNING', 'NIT']).default('WARNING'),
+  /** 发现标题；为空时回退为规则名 */
+  message: z.string().default(''),
+  /** 修复建议 */
+  suggestion: z.string().default(''),
+  /** 可选 CWE 编号（映射到 Finding.cweId，如 CWE-1177） */
+  cweId: z.string().optional(),
+  /** 文件 glob 过滤（picomatch 语义）；为空表示匹配全部文件 */
+  filePatterns: z.array(z.string()).default([]),
+  /** 匹配范围；默认仅匹配变更新增行 */
+  matchScope: z.array(z.enum(CUSTOM_RULE_MATCH_SCOPES)).default(['added']),
+  /** 启用开关；禁用规则不参与匹配但保留配置 */
+  enabled: z.boolean().default(true),
+});
+export type CustomRule = z.infer<typeof CustomRuleSchema>;
+
 /**
  * 配置 schema 的浏览器安全版本。
  * 该文件不引用 node:fs，供 API 契约和前端配置表单共享同一份结构定义。
@@ -41,10 +81,18 @@ export const AiReviewConfigSchema = z.object({
     .object({
       enabledTools: z
         .array(z.string())
-        .default(['ast_parse', 'complexity_check', 'secret_scan', 'dependency_scan']),
+        .default([
+          'ast_parse',
+          'complexity_check',
+          'secret_scan',
+          'dependency_scan',
+          'custom_rule_check',
+        ]),
       complexityThreshold: z.number().int().min(1).default(15),
     })
     .prefault({}),
+  /** 用户自定义审查规则；未配置任何规则时 custom_rule_check 工具为空操作 */
+  customRules: z.array(CustomRuleSchema).default([]),
   report: z
     .object({
       format: z.enum(['markdown', 'html', 'json']).default('markdown'),

@@ -15,7 +15,7 @@ import {
 import { EXIT_CODES, severityMeetsThreshold } from '@ai-review/shared';
 import { AiReviewConfigSchema, loadConfig } from '@ai-review/shared';
 import type { ExitCode, RagRetriever, ReviewReport, Severity } from '@ai-review/shared';
-import { buildDefaultRegistry } from '@ai-review/tools';
+import { buildDefaultRegistry, resolveEnabledTools } from '@ai-review/tools';
 
 async function loadRagRetriever(
   config: ReturnType<typeof AiReviewConfigSchema.parse>,
@@ -76,8 +76,9 @@ export async function runReview(options: RunReviewOptions): Promise<ExitCode> {
     providers: createConfiguredProviders(config),
     registry: buildDefaultRegistry({
       complexityThreshold: config.staticAnalysis.complexityThreshold,
+      customRules: config.customRules,
     }),
-    enabledTools: config.staticAnalysis.enabledTools,
+    enabledTools: resolveEnabledTools(config.staticAnalysis.enabledTools, config.customRules),
     ragTopK: config.rag.topK,
     budget: new TokenBudget(config.llm.maxTokensPerReview),
     modelName:

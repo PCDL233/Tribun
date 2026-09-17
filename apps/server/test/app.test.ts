@@ -80,7 +80,7 @@ function makeGatedRunner(gate: { promise: Promise<void>; resolve: () => void }):
 
 type Harness = ReturnType<typeof buildApp>;
 
-function makeHarness(runner: PipelineRunner, avatars?: AvatarStore): Harness {
+function makeHarness(runner: PipelineRunner, avatars?: AvatarStore, configPath?: string): Harness {
   const sqlite = openSqlite(':memory:');
   const store = new ReviewStore(sqlite);
   const users = new UserStore(sqlite);
@@ -92,6 +92,7 @@ function makeHarness(runner: PipelineRunner, avatars?: AvatarStore): Harness {
     service,
     metrics,
     ...(avatars === undefined ? {} : { avatars }),
+    ...(configPath === undefined ? {} : { configPath }),
     // 测试需要多用户注册与任意本地仓库路径；显式放开开放注册与仓库根白名单（生产默认收紧）
     registrationOpen: true,
     allowedRoots: ['D:/'],
@@ -782,6 +783,114 @@ describe('admin privilege isolation', () => {
       };
       expect(overview).toMatchObject({ userCount: 2, adminCount: 1, totalReviews: 1 });
     });
+  });
+});
+
+describe('custom review rules API', () => {
+  const rule = {
+    name: 'no-todo',
+    description: 'Forbid leftover TODO markers.',
+    pattern: '\\bTODO\\b',
+    flags: '',
+    severity: 'WARNING',
+    message: '',
+    suggestion: '',
+    filePatterns: [] as string[],
+    matchScope: ['added'],
+    enabled: true,
+  };
+
+  it('lists, saves and tests custom rules', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-review-rules-'));
+    const configPath = join(dir, '.ai-review.yml');
+    const app = makeHarness(async () => makeState(), undefined, configPath);
+    const admin = await registerUser(app, 'boss');
+
+    // 未配置时为空列表
+    const empty = await app.request('/api/admin/rules', { headers: auth(admin.cookie) });
+    expect(empty.status).toBe(200);
+    expect((await empty.json()) as { rules: unknown[] }).toEqual({ rules: [] });
+
+    // 保存一条规则并回读（持久化到配置文件）
+    const saved = await app.request('/api/admin/rules', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...auth(admin.cookie) },
+      body: JSON.stringify({ rules: [rule] }),
+    });
+    expect(saved.status).toBe(200);
+    expect(((await saved.json()) as { rules: Array<{ name: string }> }).rules[0]?.name).toBe(
+      'no-todo',
+    );
+    const listed = await app.request('/api/admin/rules', { headers: auth(admin.cookie) });
+    expect(((await listed.json()) as { rules: Array<{ name: string }> }).rules).toHaveLength(1);
+
+    // 试跑：新增行命中
+    const tested = await app.request('/api/admin/rules/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(admin.cookie) },
+      body: JSON.stringify({
+        rule,
+        sampleDiffText: '+// TODO: fix me\n+const ok = 1;\n',
+        sampleSource: '',
+      }),
+    });
+    expect(tested.status).toBe(200);
+    const { matches } = (await tested.json()) as {
+      matches: Array<{ scope: string; line: number; text: string }>;
+    };
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ scope: 'added', text: '// TODO: fix me' });
+
+    // 非法正则返回 400
+    const bad = await app.request('/api/admin/rules/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(admin.cookie) },
+      body: JSON.stringify({ rule: { ...rule, pattern: '(' }, sampleSource: '' }),
+    });
+    expect(bad.status).toBe(400);
+  });
+
+  it('rejects saving rules with an uncompilable regex', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-review-rules-'));
+    const app = makeHarness(async () => makeState(), undefined, join(dir, '.ai-review.yml'));
+    const admin = await registerUser(app, 'boss');
+    const response = await app.request('/api/admin/rules', {
+      method: 'PUT',
+      headers: { 'content-type': 'application/json', ...auth(admin.cookie) },
+      body: JSON.stringify({ rules: [{ ...rule, name: 'broken', pattern: '(' }] }),
+    });
+    expect(response.status).toBe(400);
+  });
+
+  it('dedupes overlapping added/staged hits in the test endpoint', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-review-rules-'));
+    const app = makeHarness(async () => makeState(), undefined, join(dir, '.ai-review.yml'));
+    const admin = await registerUser(app, 'boss');
+    const tested = await app.request('/api/admin/rules/test', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(admin.cookie) },
+      body: JSON.stringify({
+        rule: { ...rule, matchScope: ['added', 'staged'] },
+        sampleDiffText: '+// TODO: shared\n',
+        sampleSource: 'const a = 1;\n// TODO: shared\n',
+      }),
+    });
+    expect(tested.status).toBe(200);
+    const { matches } = (await tested.json()) as {
+      matches: Array<{ scope: string; line: number; text: string }>;
+    };
+    // 同文本跨范围命中只保留一条，且行号取 staged 的真实行号
+    expect(matches).toHaveLength(1);
+    expect(matches[0]).toMatchObject({ scope: 'staged', line: 2, text: '// TODO: shared' });
+  });
+
+  it('rejects rule management for non-admin users', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'ai-review-rules-'));
+    const app = makeHarness(async () => makeState(), undefined, join(dir, '.ai-review.yml'));
+    await registerUser(app, 'boss');
+    const staff = await registerUser(app, 'staff');
+    const response = await app.request('/api/admin/rules', { headers: auth(staff.cookie) });
+    expect(response.status).toBe(403);
   });
 });
 

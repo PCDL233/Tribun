@@ -20,6 +20,7 @@
   "dependencies": {
     "@ai-review/shared": "workspace:*",
     "@modelcontextprotocol/sdk": "catalog:",
+    "picomatch": "catalog:",
     "ts-morph": "catalog:",
     "zod": "catalog:"
   },

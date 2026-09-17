@@ -25,12 +25,16 @@ import {
   CancelReviewResponseSchema,
   AdminConfigSchema,
   AdminConfigResponseSchema,
+  AdminRulesResponseSchema,
+  AdminRulesUpdateSchema,
+  CustomRuleTestRequestSchema,
+  CustomRuleTestResultSchema,
   AiReviewConfigSchema,
   KnowledgeReindexResponseSchema,
   KnowledgeStatusResponseSchema,
 } from '@ai-review/shared';
 import { renderHtml, renderJson, renderMarkdown } from '@ai-review/report';
-import { analyzeComplexity, scanDiffTextForSecrets } from '@ai-review/tools';
+import { analyzeComplexity, compileCustomRulePattern, scanDiffTextForSecrets, testCustomRuleOnSamples } from '@ai-review/tools';
 import {
   createRequireAuth,
   generateRandomPassword,
@@ -127,6 +131,9 @@ class EventQueue<T> {
  * - DELETE /api/admin/users/:id  删除用户（admin）
  * - GET  /api/admin/overview   系统概览聚合（admin）
  * - POST /api/admin/init-config 生成默认配置文件（admin）
+ * - GET  /api/admin/rules     自定义审查规则列表（admin）
+ * - PUT  /api/admin/rules     保存自定义审查规则（admin）
+ * - POST /api/admin/rules/test 试跑自定义审查规则（admin）
  * - POST /api/admin/tools/secret-scan diff 密钥扫描（admin）
  * - POST /api/admin/tools/complexity 源码复杂度扫描（admin）
  * - GET  /api/admin/tools/hook-script 获取 pre-commit hook 脚本（admin）
@@ -487,10 +494,13 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
       const config = c.req.valid('json');
       const configPath = deps.configPath ?? '.ai-review.yml';
       const current = readAdminConfig(configPath);
-      const persisted =
-        config.llm.apiKey === '********'
+      const persisted = {
+        ...(config.llm.apiKey === '********'
           ? { ...config, llm: { ...config.llm, apiKey: current.llm.apiKey } }
-          : config;
+          : config),
+        // 系统配置表单不渲染规则字段：入参为空时保留既有规则，避免保存配置时误清空自定义规则
+        customRules: config.customRules.length === 0 ? current.customRules : config.customRules,
+      };
       writeFileSync(configPath, stringifyYaml(persisted), 'utf8');
       return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(persisted) }));
     },
@@ -505,6 +515,52 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     writeFileSync(configPath, stringifyYaml(config), 'utf8');
     return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(config) }));
   });
+
+  // —— 自定义审查规则（admin）：规则随配置持久化，经 custom_rule_check 工具在审查时生效 ——
+  app.get('/api/admin/rules', requirePermission('/admin/rules'), (c) => {
+    const configPath = deps.configPath ?? '.ai-review.yml';
+    const config = readAdminConfig(configPath);
+    return c.json(AdminRulesResponseSchema.parse({ rules: config.customRules }));
+  });
+
+  app.put(
+    '/api/admin/rules',
+    requirePermission('/admin/rules'),
+    zValidator('json', AdminRulesUpdateSchema),
+    (c) => {
+      const { rules } = c.req.valid('json');
+      // 正则可编译校验：非法表达式在保存时即拒绝，避免规则在审查中静默失效
+      const invalid = rules.find((rule) => compileCustomRulePattern(rule) === null);
+      if (invalid !== undefined) {
+        return c.json(
+          { error: `规则「${invalid.name}」的正则表达式无法编译，请检查 pattern 与 flags` },
+          400,
+        );
+      }
+      const configPath = deps.configPath ?? '.ai-review.yml';
+      const current = readAdminConfig(configPath);
+      const persisted = { ...current, customRules: rules };
+      writeFileSync(configPath, stringifyYaml(persisted), 'utf8');
+      return c.json(AdminRulesResponseSchema.parse({ rules: persisted.customRules }));
+    },
+  );
+
+  app.post(
+    '/api/admin/rules/test',
+    requirePermission('/admin/rules'),
+    zValidator('json', CustomRuleTestRequestSchema),
+    (c) => {
+      const { rule, sampleDiffText, sampleSource } = c.req.valid('json');
+      if (compileCustomRulePattern(rule) === null) {
+        return c.json({ error: '正则表达式无法编译，请检查 pattern 与 flags' }, 400);
+      }
+      const matches = testCustomRuleOnSamples(rule, {
+        diffText: sampleDiffText,
+        source: sampleSource,
+      });
+      return c.json(CustomRuleTestResultSchema.parse({ matches }));
+    },
+  );
 
   app.post(
     '/api/admin/tools/secret-scan',
