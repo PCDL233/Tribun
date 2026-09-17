@@ -1,6 +1,6 @@
 llm:
   provider: anthropic
-  model: claude-sonnet-4.5
+  model: claude-sonnet-5
   apiKey: ${AI_REVIEW_API_KEY}
   maxTokensPerReview: 50000
   temperature: 0.1

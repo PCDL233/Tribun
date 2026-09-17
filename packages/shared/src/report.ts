@@ -8,7 +8,7 @@ export const ReviewMetaSchema = z.object({
   branch: z.string(),
   commitHash: z.string().optional(),
   author: z.string().optional(),
-  /** 如 "claude-sonnet-4.5 + 静态分析" 或 "mock + 静态分析" */
+  /** 如 "claude-sonnet-5 + 静态分析" 或 "mock + 静态分析" */
   model: z.string(),
   mode: z.enum(['fast', 'full']),
   /** 审查终态；缺省视为 completed（CLI 直跑报告不落库无状态语义） */

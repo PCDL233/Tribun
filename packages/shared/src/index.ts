@@ -6,6 +6,7 @@ export * from './diff.js';
 export * from './errors.js';
 export * from './exit-codes.js';
 export * from './finding.js';
+export * from './model-catalog.js';
 export * from './plan.js';
 export * from './report.js';
 export * from './severity.js';

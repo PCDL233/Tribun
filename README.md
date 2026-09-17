@@ -58,19 +58,19 @@
 
 ## 技术栈
 
-| 层次       | 技术                                                           |
-| ---------- | -------------------------------------------------------------- |
-| 运行时     | Node.js ≥22、TypeScript 6、ESM                                 |
-| Monorepo   | pnpm 10.24.0、Turborepo                                        |
-| CLI        | Commander、@clack/prompts                                      |
-| Agent 编排 | LangGraph.js、AI SDK 5                                         |
-| 模型       | Anthropic、OpenAI、OpenAI-compatible Ollama、mock              |
-| 静态分析   | ts-morph、Tree-sitter、确定性 secret/complexity 工具           |
-| RAG        | LanceDB、MiniSearch、RRF                                       |
-| 服务端     | Hono 4、REST、SSE、Prometheus                                  |
-| 数据库     | Drizzle ORM、better-sqlite3、SQLite                            |
-| 前端       | React 19、Vite 8、TanStack Router/Query、Ant Design 6、ECharts |
-| 部署       | Docker multi-stage、`node:22-alpine`                           |
+| 层次       | 技术                                                                                      |
+| ---------- | ----------------------------------------------------------------------------------------- |
+| 运行时     | Node.js ≥22、TypeScript 6、ESM                                                            |
+| Monorepo   | pnpm 10.24.0、Turborepo                                                                   |
+| CLI        | Commander、@clack/prompts                                                                 |
+| Agent 编排 | LangGraph.js、AI SDK 5                                                                    |
+| 模型       | Anthropic、OpenAI、国内主流（DeepSeek/智谱/Moonshot/通义千问/豆包/MiniMax）、Ollama、mock |
+| 静态分析   | ts-morph、Tree-sitter、确定性 secret/complexity 工具                                      |
+| RAG        | LanceDB、MiniSearch、RRF                                                                  |
+| 服务端     | Hono 4、REST、SSE、Prometheus                                                             |
+| 数据库     | Drizzle ORM、better-sqlite3、SQLite                                                       |
+| 前端       | React 19、Vite 8、TanStack Router/Query、Ant Design 6、ECharts                            |
+| 部署       | Docker multi-stage、`node:22-alpine`                                                      |
 
 第三方依赖版本集中声明在 `pnpm-workspace.yaml` 的 `catalog`，各 workspace 包使用 `catalog:` 引用。
 
@@ -137,7 +137,7 @@ $env:AI_REVIEW_API_KEY = "your-api-key"
 export AI_REVIEW_API_KEY="your-api-key"
 ```
 
-默认 provider 是 `anthropic`。也可以把 `llm.provider` 改为 `openai`、`ollama` 或 `mock`。其中 `mock` 不访问网络，适合离线验证流水线和运行确定性测试。
+默认 provider 是 `anthropic`。也可以把 `llm.provider` 改为 `openai`、`deepseek`、`zhipu`、`moonshot`、`dashscope`、`volcengine`、`minimax`、`ollama` 或 `mock`。其中 `mock` 不访问网络，适合离线验证流水线和运行确定性测试。
 
 ### 3. 本地运行 Dashboard
 
@@ -281,8 +281,8 @@ pnpm exec ai-review server --port 8080 --web-dist apps/web/dist
 
 ```yaml
 llm:
-  provider: anthropic # anthropic | openai | ollama | mock
-  model: claude-sonnet-4.5
+  provider: anthropic # anthropic | openai | deepseek | zhipu | moonshot | dashscope | volcengine | minimax | ollama | mock
+  model: claude-sonnet-5
   apiKey: ${AI_REVIEW_API_KEY}
   maxTokensPerReview: 50000
   temperature: 0.1
@@ -312,11 +312,17 @@ report:
 
 LLM Provider 端点：
 
-| Provider  | 默认端点                       | 可选环境变量                   |
-| --------- | ------------------------------ | ------------------------------ |
-| Anthropic | `https://api.anthropic.com/v1` | `AI_REVIEW_ANTHROPIC_BASE_URL` |
-| OpenAI    | `https://api.openai.com/v1`    | `AI_REVIEW_OPENAI_BASE_URL`    |
-| Ollama    | `http://127.0.0.1:11434/v1`    | `AI_REVIEW_OLLAMA_BASE_URL`    |
+| Provider  | 默认端点                                            | 可选环境变量                    |
+| --------- | --------------------------------------------------- | ------------------------------- |
+| Anthropic | `https://api.anthropic.com/v1`                      | `AI_REVIEW_ANTHROPIC_BASE_URL`  |
+| OpenAI    | `https://api.openai.com/v1`                         | `AI_REVIEW_OPENAI_BASE_URL`     |
+| DeepSeek  | `https://api.deepseek.com/v1`                       | `AI_REVIEW_DEEPSEEK_BASE_URL`   |
+| 智谱 GLM  | `https://open.bigmodel.cn/api/paas/v4`              | `AI_REVIEW_ZHIPU_BASE_URL`      |
+| Moonshot  | `https://api.moonshot.cn/v1`                        | `AI_REVIEW_MOONSHOT_BASE_URL`   |
+| 通义千问  | `https://dashscope.aliyuncs.com/compatible-mode/v1` | `AI_REVIEW_DASHSCOPE_BASE_URL`  |
+| 豆包      | `https://ark.cn-beijing.volces.com/api/v3`          | `AI_REVIEW_VOLCENGINE_BASE_URL` |
+| MiniMax   | `https://api.minimax.chat/v1`                       | `AI_REVIEW_MINIMAX_BASE_URL`    |
+| Ollama    | `http://127.0.0.1:11434/v1`                         | `AI_REVIEW_OLLAMA_BASE_URL`     |
 
 Ollama 的默认模型回退为 `qwen3-coder:30b`，可用 `AI_REVIEW_OLLAMA_MODEL` 覆盖。云端 provider 未配置真实 Key 时，系统会尝试本地 Ollama；若仍不可用，则保留确定性静态分析和 mock fallback。生产环境仍应显式配置可用的模型服务。
 

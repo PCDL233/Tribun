@@ -7,6 +7,8 @@ import { ReviewReportSchema } from './report.js';
 export * from './auth.js';
 export { FindingSchema } from './finding.js';
 export type { Finding } from './finding.js';
+// 模型服务商目录同样无 node 依赖，供管理后台页面经浏览器安全子路径导入
+export * from './model-catalog.js';
 
 /**
  * —— API 契约（方案 2.3：前端零手工类型，全部推导自 shared）——

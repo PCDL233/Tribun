@@ -19,3 +19,6 @@ Thumbs.db
 .vscode/
 .idea/
 *.log
+
+CLAUDE.md
+AGENTS.md

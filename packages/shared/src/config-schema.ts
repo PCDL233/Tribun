@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { MODEL_PROVIDER_IDS } from './model-catalog.js';
 
 /**
  * 配置 schema 的浏览器安全版本。
@@ -7,8 +8,8 @@ import { z } from 'zod';
 export const AiReviewConfigSchema = z.object({
   llm: z
     .object({
-      provider: z.enum(['anthropic', 'openai', 'ollama', 'mock']).default('anthropic'),
-      model: z.string().default('claude-sonnet-4.5'),
+      provider: z.enum(MODEL_PROVIDER_IDS).default('anthropic'),
+      model: z.string().default('claude-sonnet-5'),
       apiKey: z.string().default('${AI_REVIEW_API_KEY}'),
       baseUrl: z.string().optional(),
       maxTokensPerReview: z.number().int().positive().max(200_000).default(50_000),
