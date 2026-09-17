@@ -35,12 +35,15 @@ export const DEFAULT_USER_PATHS = ['/', '/run', '/reviews', '/stats', '/profile'
 /**
  * 判断某用户是否可访问指定路由路径。
  * '/'（工作台/首页）作为登录后通用落地页恒可访问，避免空权限用户被反复重定向造成死循环；
- * 其余路径：拥有 '*' 或精确匹配该路径即视为可访问，否则拒绝。
+ * 其余路径：拥有 '*' 或精确匹配该路径即视为可访问；
+ * 动态子路径（如 /reviews/<id>）按父级前缀授权：持有 '/reviews' 即可访问其下的任意子路径，
+ * 否则拒绝。
  */
 export function canAccessPath(permissions: string[], path: string): boolean {
   if (path === '/') return true;
   if (permissions.includes('*')) return true;
-  return permissions.includes(path);
+  if (permissions.includes(path)) return true;
+  return permissions.some((p) => p !== '/' && path.startsWith(`${p}/`));
 }
 
 /** 是否具备进入管理后台的能力：admin 角色、'*' 权限，或任一 '/admin*' 页面权限。 */
