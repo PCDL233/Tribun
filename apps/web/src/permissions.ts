@@ -22,6 +22,8 @@ export const ALL_ROUTE_PERMISSIONS: RoutePermission[] = [
   { path: '/admin/roles', label: '角色管理', group: 'admin' },
   { path: '/admin/config', label: '系统配置', group: 'admin' },
   { path: '/admin/rules', label: '自定义规则', group: 'admin' },
+  { path: '/admin/login-logs', label: '登录日志', group: 'admin' },
+  { path: '/admin/operation-logs', label: '操作日志', group: 'admin' },
   { path: '/admin/ai', label: 'AI 模型', group: 'admin' },
   { path: '/admin/knowledge', label: '知识库', group: 'admin' },
   { path: '/admin/tools', label: '分析工具', group: 'admin' },

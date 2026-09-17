@@ -168,6 +168,29 @@ export function AdminConfigPage(): ReactElement {
               </Typography.Paragraph>
             </Card>
           </Col>
+          <Col xs={24} lg={12}>
+            <Card className="surface-card" title={<CardHeading title="审计日志" />}>
+              <Form.Item label="启用日志" name={['logging', 'enabled']} valuePropName="checked">
+                <Switch />
+              </Form.Item>
+              <Form.Item label="输出到控制台" name={['logging', 'console']} valuePropName="checked">
+                <Switch />
+              </Form.Item>
+              <Form.Item label="写入日志文件" name={['logging', 'file']} valuePropName="checked">
+                <Switch />
+              </Form.Item>
+              <Form.Item label="日志目录" name={['logging', 'dir']}>
+                <Input placeholder="logs" />
+              </Form.Item>
+              <Form.Item label="文件保留天数" name={['logging', 'maxDays']}>
+                <InputNumber min={1} max={3650} className="full-width" />
+              </Form.Item>
+              <Typography.Paragraph type="secondary" className="config-help">
+                登录日志与操作日志按日滚动归档（ai-review-login-YYYY-MM-DD.log），超保留天数自动清理；
+                日志配置在服务启动时读取，保存后需重启服务生效。
+              </Typography.Paragraph>
+            </Card>
+          </Col>
         </Row>
         <Space style={{ marginTop: 16 }}>
           <Button type="primary" htmlType="submit" loading={saveMutation.isPending}>

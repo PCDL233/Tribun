@@ -63,6 +63,9 @@ catalogs:
     commander:
       specifier: ^15.0.0
       version: 15.0.0
+    dayjs:
+      specifier: ^1.11.13
+      version: 1.11.23
     drizzle-orm:
       specifier: ^0.45.2
       version: 0.45.2
@@ -304,6 +307,9 @@ importers:
       antd:
         specifier: 'catalog:'
         version: 6.6.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      dayjs:
+        specifier: 'catalog:'
+        version: 1.11.23
       echarts:
         specifier: 'catalog:'
         version: 6.1.0

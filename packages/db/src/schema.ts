@@ -140,6 +140,93 @@ export const roles = sqliteTable('roles', {
     .$defaultFn(() => new Date().toISOString()),
 });
 
+/**
+ * 登录日志表（认证事件审计，参照云审计字段规范）。
+ * 失败登录同样入库（含尝试用户名与 IP），供安全分析与异常登录检测；
+ * 不记录密码、令牌等任何敏感信息。
+ */
+export const loginLogs = sqliteTable(
+  'login_logs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** 操作用户 id；登录失败且用户不存在时为 NULL */
+    userId: text('user_id'),
+    /** 尝试登录的用户名（失败登录同样记录） */
+    username: text('username').notNull(),
+    action: text('action', {
+      enum: ['login', 'logout', 'register', 'change_password'],
+    }).notNull(),
+    status: text('status', { enum: ['success', 'failed'] }).notNull(),
+    /** 失败原因（invalid-credentials / account-disabled 等）；成功为 NULL */
+    reason: text('reason'),
+    /** 来源 IP */
+    ip: text('ip').notNull(),
+    /** 客户端 User-Agent；无则空串 */
+    userAgent: text('user_agent').notNull().default(''),
+    createdAt: text('created_at')
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index('idx_login_logs_created_at').on(table.createdAt),
+    index('idx_login_logs_username').on(table.username),
+  ],
+);
+
+/**
+ * 操作日志表（管理后台与审查写操作审计）。
+ * 记录操作者、动作、目标资源与结果；detail 为 JSON 摘要，禁止记录密码/令牌。
+ */
+export const operationLogs = sqliteTable(
+  'operation_logs',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    /** 操作者用户 id；匿名请求（如登录失败）为 NULL */
+    userId: text('user_id'),
+    username: text('username').notNull(),
+    action: text('action', {
+      enum: [
+        'create',
+        'update',
+        'delete',
+        'login',
+        'logout',
+        'register',
+        'change_password',
+        'reset_password',
+        'assign_roles',
+        'start_review',
+        'rerun_review',
+        'cancel_review',
+        'delete_review',
+        'mark_false_positive',
+        'save_config',
+        'save_rules',
+        'test_rules',
+        'reindex_knowledge',
+      ],
+    }).notNull(),
+    /** 资源类型（user / role / config / rules / review / finding / knowledge / auth） */
+    resource: text('resource').notNull(),
+    /** 目标资源 id（如用户 id、审查 id）；无则空串 */
+    resourceId: text('resource_id').notNull().default(''),
+    /** 操作摘要 JSON；不记录密码/令牌等敏感字段 */
+    detail: text('detail').notNull().default(''),
+    status: text('status', { enum: ['success', 'failed'] }).notNull(),
+    /** 失败原因 */
+    reason: text('reason'),
+    ip: text('ip').notNull(),
+    userAgent: text('user_agent').notNull().default(''),
+    createdAt: text('created_at')
+      .notNull()
+      .$defaultFn(() => new Date().toISOString()),
+  },
+  (table) => [
+    index('idx_operation_logs_created_at').on(table.createdAt),
+    index('idx_operation_logs_username').on(table.username),
+  ],
+);
+
 /** 用户-角色关联表（多对多） */
 export const userRoles = sqliteTable(
   'user_roles',
@@ -162,3 +249,5 @@ export type FindingRow = typeof findings.$inferSelect;
 export type ReviewCacheRow = typeof reviewCache.$inferSelect;
 export type UserRow = typeof users.$inferSelect;
 export type SessionRow = typeof sessions.$inferSelect;
+export type LoginLogRow = typeof loginLogs.$inferSelect;
+export type OperationLogRow = typeof operationLogs.$inferSelect;

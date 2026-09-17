@@ -29,6 +29,10 @@ import {
   AdminRulesUpdateSchema,
   CustomRuleTestRequestSchema,
   CustomRuleTestResultSchema,
+  LoginLogQuerySchema,
+  LoginLogListResponseSchema,
+  OperationLogQuerySchema,
+  OperationLogListResponseSchema,
   AiReviewConfigSchema,
   KnowledgeReindexResponseSchema,
   KnowledgeStatusResponseSchema,
@@ -46,8 +50,9 @@ import {
 import type { ReviewMetrics } from './metrics.js';
 import type { ReviewStageEvent } from './review-service.js';
 import { AvatarError, AvatarStore, AVATAR_MAX_BYTES } from './avatar.js';
-import { createRateLimiter } from './rate-limit.js';
+import { createRateLimiter, getClientIp } from './rate-limit.js';
 import { securityHeaders } from './security-headers.js';
+import { AuditService, createNoopAudit } from './audit.js';
 import type { ReviewService } from './review-service.js';
 
 /** POST /api/reviews 入参（方案 2.3：API 入参经 zod 校验） */
@@ -80,6 +85,8 @@ export type AppDeps = {
   knowledge?: KnowledgeManager;
   /** 可选头像存储；未装配时头像上传返回 503 */
   avatars?: AvatarStore;
+  /** 审计日志服务（登录日志 + 操作日志）；未装配时静默跳过 */
+  audit?: AuditService;
 };
 
 export type KnowledgeManager = {
@@ -131,6 +138,8 @@ class EventQueue<T> {
  * - DELETE /api/admin/users/:id  删除用户（admin）
  * - GET  /api/admin/overview   系统概览聚合（admin）
  * - POST /api/admin/init-config 生成默认配置文件（admin）
+ * - GET  /api/admin/login-logs     登录日志（admin，分页+筛选）
+ * - GET  /api/admin/operation-logs 操作日志（admin，分页+筛选）
  * - GET  /api/admin/rules     自定义审查规则列表（admin）
  * - PUT  /api/admin/rules     保存自定义审查规则（admin）
  * - POST /api/admin/rules/test 试跑自定义审查规则（admin）
@@ -204,6 +213,17 @@ const gzipMiddleware = compress({ encoding: 'gzip' });
 
 export function buildApp(deps: AppDeps): Hono<AppEnv> {
   const app = new Hono<AppEnv>();
+  // 审计日志：未装配时使用空实现（写路径 no-op、查询返回空页），既有调用方无需感知
+  const audit = deps.audit ?? createNoopAudit();
+  // 审计埋点用请求元信息：客户端 IP（与限流同一判定）与 User-Agent
+  const requestMeta = (c: import('hono').Context): { ip: string; userAgent: string } => ({
+    ip: getClientIp(c),
+    userAgent: c.req.header('user-agent') ?? '',
+  });
+  const actor = (c: import('hono').Context): { userId: string; username: string } => {
+    const user = c.get('user');
+    return { userId: user.id, username: user.username };
+  };
 
   // —— 全局安全响应头（方案 5）——
   app.use('*', securityHeaders());
@@ -227,6 +247,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   // —— 认证路由（匿名可访问 + me/change-password 自带 requireAuth）——
   registerAuthRoutes(app, {
     users: deps.users,
+    audit,
     ...(deps.registrationOpen === undefined ? {} : { registrationOpen: deps.registrationOpen }),
   });
 
@@ -300,24 +321,24 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
 
   app.post('/api/reviews', zValidator('json', StartReviewSchema), (c) => {
     const { repoPath, mode, blockOn } = c.req.valid('json');
+    const meta = requestMeta(c);
+    const me = actor(c);
     // 方案 3：仅允许审查落在白名单根目录内的仓库，防任意本地路径读取
     try {
       assertRepoPathAllowed(repoPath, deps.allowedRoots ?? [process.cwd()]);
     } catch {
+      audit.operation({ ...me, ...meta, action: 'start_review', resource: 'review', detail: JSON.stringify({ repoPath, mode }), status: 'failed', reason: 'path-not-allowed' });
       return c.json({ error: '仓库路径不在允许的目录白名单内' }, 400);
     }
     const createdBy = c.get('user').id;
-    return c.json(
-      {
-        reviewId: deps.service.startReview({
-          repoPath,
-          mode,
-          createdBy,
-          ...(blockOn === undefined ? {} : { blockOn }),
-        }),
-      },
-      202,
-    );
+    const reviewId = deps.service.startReview({
+      repoPath,
+      mode,
+      createdBy,
+      ...(blockOn === undefined ? {} : { blockOn }),
+    });
+    audit.operation({ ...me, ...meta, action: 'start_review', resource: 'review', resourceId: reviewId, detail: JSON.stringify({ repoPath, mode }), status: 'success' });
+    return c.json({ reviewId }, 202);
   });
 
   // 数据隔离：admin 可见全部；普通用户仅见本人发起的记录，筛选与分页在数据库侧完成
@@ -350,12 +371,20 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   app.post('/api/reviews/:id/rerun', (c) => {
     const current = c.get('user');
     const reviewId = c.req.param('id');
-    if (!canAccessReview(deps, current, reviewId))
+    const meta = requestMeta(c);
+    if (!canAccessReview(deps, current, reviewId)) {
+      audit.operation({ userId: current.id, username: current.username, ...meta, action: 'rerun_review', resource: 'review', resourceId: reviewId, status: 'failed', reason: 'not-found' });
       return c.json({ error: '审查记录不存在' }, 404);
+    }
     try {
-      return c.json({ reviewId: deps.service.rerunReview(reviewId, current.id) }, 202);
+      const newReviewId = deps.service.rerunReview(reviewId, current.id);
+      audit.operation({ userId: current.id, username: current.username, ...meta, action: 'rerun_review', resource: 'review', resourceId: reviewId, detail: JSON.stringify({ newReviewId }), status: 'success' });
+      return c.json({ reviewId: newReviewId }, 202);
     } catch (e) {
-      if (e instanceof StoreError) return c.json({ error: e.message }, 404);
+      if (e instanceof StoreError) {
+        audit.operation({ userId: current.id, username: current.username, ...meta, action: 'rerun_review', resource: 'review', resourceId: reviewId, status: 'failed', reason: 'not-found' });
+        return c.json({ error: e.message }, 404);
+      }
       throw e;
     }
   });
@@ -363,19 +392,30 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   app.post('/api/reviews/:id/cancel', (c) => {
     const current = c.get('user');
     const reviewId = c.req.param('id');
-    if (!canAccessReview(deps, current, reviewId))
+    const meta = requestMeta(c);
+    if (!canAccessReview(deps, current, reviewId)) {
+      audit.operation({ userId: current.id, username: current.username, ...meta, action: 'cancel_review', resource: 'review', resourceId: reviewId, status: 'failed', reason: 'not-found' });
       return c.json({ error: '审查记录不存在' }, 404);
-    if (!deps.service.cancelReview(reviewId))
+    }
+    if (!deps.service.cancelReview(reviewId)) {
+      audit.operation({ userId: current.id, username: current.username, ...meta, action: 'cancel_review', resource: 'review', resourceId: reviewId, status: 'failed', reason: 'already-terminal' });
       return c.json({ error: '审查任务已结束或不存在' }, 409);
+    }
+    audit.operation({ userId: current.id, username: current.username, ...meta, action: 'cancel_review', resource: 'review', resourceId: reviewId, status: 'success' });
     return c.json(CancelReviewResponseSchema.parse({ cancelled: true }));
   });
 
   app.delete('/api/reviews/:id', (c) => {
     const current = c.get('user');
     const reviewId = c.req.param('id');
-    if (!canAccessReview(deps, current, reviewId))
+    const meta = requestMeta(c);
+    if (!canAccessReview(deps, current, reviewId)) {
+      audit.operation({ userId: current.id, username: current.username, ...meta, action: 'delete_review', resource: 'review', resourceId: reviewId, status: 'failed', reason: 'not-found' });
       return c.json({ error: '审查记录不存在' }, 404);
-    return c.json(DeleteReviewResponseSchema.parse({ deleted: deps.store.deleteReview(reviewId) }));
+    }
+    const deleted = deps.store.deleteReview(reviewId);
+    audit.operation({ userId: current.id, username: current.username, ...meta, action: 'delete_review', resource: 'review', resourceId: reviewId, status: deleted ? 'success' : 'failed', ...(deleted ? {} : { reason: 'not-found' }) });
+    return c.json(DeleteReviewResponseSchema.parse({ deleted }));
   });
 
   app.get('/api/reviews/:id/export', (c) => {
@@ -436,14 +476,18 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
       return c.json({ error: '发现 ID 无效' }, 400);
     }
     const current = c.get('user');
+    const meta = requestMeta(c);
     const owner = deps.store.getFindingReviewOwner(id);
     if (owner !== current.id && current.role !== 'admin') {
+      audit.operation({ userId: current.id, username: current.username, ...meta, action: 'mark_false_positive', resource: 'finding', resourceId: String(id), status: 'failed', reason: 'not-found' });
       return c.json({ error: '发现记录不存在' }, 404);
     }
     const { isFalsePositive } = c.req.valid('json');
     if (!deps.store.setFindingFalsePositive(id, isFalsePositive)) {
+      audit.operation({ userId: current.id, username: current.username, ...meta, action: 'mark_false_positive', resource: 'finding', resourceId: String(id), status: 'failed', reason: 'not-found' });
       return c.json({ error: '发现记录不存在' }, 404);
     }
+    audit.operation({ userId: current.id, username: current.username, ...meta, action: 'mark_false_positive', resource: 'finding', resourceId: String(id), detail: JSON.stringify({ isFalsePositive }), status: 'success' });
     return c.json({ updated: true });
   });
 
@@ -502,17 +546,26 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
         customRules: config.customRules.length === 0 ? current.customRules : config.customRules,
       };
       writeFileSync(configPath, stringifyYaml(persisted), 'utf8');
+      const me = actor(c);
+      const meta = requestMeta(c);
+      // 只记录变更字段名，避免 apiKey 等敏感值进入审计日志
+      const fields = Object.keys(config).join(',');
+      audit.operation({ ...me, ...meta, action: 'save_config', resource: 'config', detail: JSON.stringify({ fields }), status: 'success' });
       return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(persisted) }));
     },
   );
 
   app.post('/api/admin/init-config', requirePermission('/admin/init'), (c) => {
     const configPath = deps.configPath ?? '.ai-review.yml';
+    const me = actor(c);
+    const meta = requestMeta(c);
     if (existsSync(configPath)) {
+      audit.operation({ ...me, ...meta, action: 'save_config', resource: 'config', status: 'failed', reason: 'already-exists' });
       return c.json({ error: '配置文件已存在' }, 409);
     }
     const config = AiReviewConfigSchema.parse({});
     writeFileSync(configPath, stringifyYaml(config), 'utf8');
+    audit.operation({ ...me, ...meta, action: 'save_config', resource: 'config', status: 'success' });
     return c.json(AdminConfigResponseSchema.parse({ config: maskApiKey(config) }));
   });
 
@@ -529,9 +582,12 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     zValidator('json', AdminRulesUpdateSchema),
     (c) => {
       const { rules } = c.req.valid('json');
+      const me = actor(c);
+      const meta = requestMeta(c);
       // 正则可编译校验：非法表达式在保存时即拒绝，避免规则在审查中静默失效
       const invalid = rules.find((rule) => compileCustomRulePattern(rule) === null);
       if (invalid !== undefined) {
+        audit.operation({ ...me, ...meta, action: 'save_rules', resource: 'rules', status: 'failed', reason: 'invalid-regex' });
         return c.json(
           { error: `规则「${invalid.name}」的正则表达式无法编译，请检查 pattern 与 flags` },
           400,
@@ -541,6 +597,7 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
       const current = readAdminConfig(configPath);
       const persisted = { ...current, customRules: rules };
       writeFileSync(configPath, stringifyYaml(persisted), 'utf8');
+      audit.operation({ ...me, ...meta, action: 'save_rules', resource: 'rules', detail: JSON.stringify({ count: rules.length }), status: 'success' });
       return c.json(AdminRulesResponseSchema.parse({ rules: persisted.customRules }));
     },
   );
@@ -551,13 +608,17 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     zValidator('json', CustomRuleTestRequestSchema),
     (c) => {
       const { rule, sampleDiffText, sampleSource } = c.req.valid('json');
+      const me = actor(c);
+      const meta = requestMeta(c);
       if (compileCustomRulePattern(rule) === null) {
+        audit.operation({ ...me, ...meta, action: 'test_rules', resource: 'rules', resourceId: rule.name, status: 'failed', reason: 'invalid-regex' });
         return c.json({ error: '正则表达式无法编译，请检查 pattern 与 flags' }, 400);
       }
       const matches = testCustomRuleOnSamples(rule, {
         diffText: sampleDiffText,
         source: sampleSource,
       });
+      audit.operation({ ...me, ...meta, action: 'test_rules', resource: 'rules', resourceId: rule.name, detail: JSON.stringify({ matches: matches.length }), status: 'success' });
       return c.json(CustomRuleTestResultSchema.parse({ matches }));
     },
   );
@@ -604,9 +665,12 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
   });
 
   app.post('/api/admin/knowledge/reindex', requirePermission('/admin/knowledge'), (c) => {
-    if (deps.knowledge === undefined)
+    if (deps.knowledge === undefined) {
+      audit.operation({ ...actor(c), ...requestMeta(c), action: 'reindex_knowledge', resource: 'knowledge', status: 'failed', reason: 'not-configured' });
       return c.json({ error: '知识库服务未配置' }, 503);
+    }
     void deps.knowledge.reindex().catch(() => undefined);
+    audit.operation({ ...actor(c), ...requestMeta(c), action: 'reindex_knowledge', resource: 'knowledge', status: 'success' });
     return c.json(KnowledgeReindexResponseSchema.parse({ accepted: true }), 202);
   });
 
@@ -620,6 +684,8 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     zValidator('json', AdminCreateUserSchema),
     async (c) => {
       const { username, password } = c.req.valid('json');
+      const me = actor(c);
+      const meta = requestMeta(c);
       let user: SafeUser;
       try {
         // 管理员代办创建：固定为普通用户角色
@@ -629,9 +695,13 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
           role: 'user',
         });
       } catch (e) {
-        if (e instanceof StoreError) return c.json({ error: e.message }, 409);
+        if (e instanceof StoreError) {
+          audit.operation({ ...me, ...meta, action: 'create', resource: 'user', detail: JSON.stringify({ username }), status: 'failed', reason: 'username-exists' });
+          return c.json({ error: e.message }, 409);
+        }
         throw e;
       }
+      audit.operation({ ...me, ...meta, action: 'create', resource: 'user', resourceId: user.id, detail: JSON.stringify({ username }), status: 'success' });
       return c.json(AuthResponseSchema.parse({ user }), 201);
     },
   );
@@ -647,6 +717,8 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     zValidator('json', RoleInputSchema),
     (c) => {
       const input = c.req.valid('json');
+      const me = actor(c);
+      const meta = requestMeta(c);
       try {
         const role = deps.users.createRole({
           name: input.name,
@@ -654,9 +726,13 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
           priority: input.priority,
           permissions: input.permissions,
         });
+        audit.operation({ ...me, ...meta, action: 'create', resource: 'role', resourceId: role.id, detail: JSON.stringify({ name: role.name }), status: 'success' });
         return c.json(RoleResponseSchema.parse({ role }), 201);
       } catch (e) {
-        if (e instanceof StoreError) return c.json({ error: e.message }, 409);
+        if (e instanceof StoreError) {
+          audit.operation({ ...me, ...meta, action: 'create', resource: 'role', detail: JSON.stringify({ name: input.name }), status: 'failed', reason: 'name-exists' });
+          return c.json({ error: e.message }, 409);
+        }
         throw e;
       }
     },
@@ -668,30 +744,48 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     zValidator('json', RoleInputSchema),
     (c) => {
       const input = c.req.valid('json');
+      const me = actor(c);
+      const meta = requestMeta(c);
+      const roleId = c.req.param('id');
       try {
-        const role = deps.users.updateRole(c.req.param('id'), {
+        const role = deps.users.updateRole(roleId, {
           name: input.name,
           description: input.description ?? null,
           priority: input.priority,
           permissions: input.permissions,
         });
-        if (role === undefined) return c.json({ error: '角色不存在' }, 404);
+        if (role === undefined) {
+          audit.operation({ ...me, ...meta, action: 'update', resource: 'role', resourceId: roleId, status: 'failed', reason: 'not-found' });
+          return c.json({ error: '角色不存在' }, 404);
+        }
+        audit.operation({ ...me, ...meta, action: 'update', resource: 'role', resourceId: roleId, detail: JSON.stringify({ name: role.name }), status: 'success' });
         return c.json(RoleResponseSchema.parse({ role }));
       } catch (e) {
-        if (e instanceof StoreError) return c.json({ error: e.message }, 409);
+        if (e instanceof StoreError) {
+          audit.operation({ ...me, ...meta, action: 'update', resource: 'role', resourceId: roleId, status: 'failed', reason: 'name-exists' });
+          return c.json({ error: e.message }, 409);
+        }
         throw e;
       }
     },
   );
 
   app.delete('/api/admin/roles/:id', requirePermission('/admin/roles'), (c) => {
+    const me = actor(c);
+    const meta = requestMeta(c);
+    const roleId = c.req.param('id');
     try {
-      if (!deps.users.deleteRole(c.req.param('id'))) {
+      if (!deps.users.deleteRole(roleId)) {
+        audit.operation({ ...me, ...meta, action: 'delete', resource: 'role', resourceId: roleId, status: 'failed', reason: 'not-found' });
         return c.json({ error: '角色不存在' }, 404);
       }
+      audit.operation({ ...me, ...meta, action: 'delete', resource: 'role', resourceId: roleId, status: 'success' });
       return c.json({ deleted: true });
     } catch (e) {
-      if (e instanceof StoreError) return c.json({ error: e.message }, 400);
+      if (e instanceof StoreError) {
+        audit.operation({ ...me, ...meta, action: 'delete', resource: 'role', resourceId: roleId, status: 'failed', reason: 'system-role' });
+        return c.json({ error: e.message }, 400);
+      }
       throw e;
     }
   });
@@ -703,11 +797,15 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
     zValidator('json', AssignRolesSchema),
     (c) => {
       const { roleIds } = c.req.valid('json');
+      const me = actor(c);
+      const meta = requestMeta(c);
       if (!deps.users.assignRoles(c.req.param('id'), roleIds)) {
+        audit.operation({ ...me, ...meta, action: 'assign_roles', resource: 'user', resourceId: c.req.param('id'), status: 'failed', reason: 'not-found' });
         return c.json({ error: '用户不存在' }, 404);
       }
       const user = deps.users.getById(c.req.param('id'));
       if (user === undefined) return c.json({ error: '用户不存在' }, 404);
+      audit.operation({ ...me, ...meta, action: 'assign_roles', resource: 'user', resourceId: user.id, detail: JSON.stringify({ roleIds }), status: 'success' });
       return c.json(AuthResponseSchema.parse({ user }));
     },
   );
@@ -720,39 +818,72 @@ export function buildApp(deps: AppDeps): Hono<AppEnv> {
       const targetId = c.req.param('id');
       const current = c.get('user');
       const patch = c.req.valid('json');
+      const meta = requestMeta(c);
       // 防自锁：唯一操作人不可自降权限或自禁用（admin 数量判定交给列表页展示，此处守住直接风险）
       if (targetId === current.id && (patch.role === 'user' || patch.status === 'disabled')) {
+        audit.operation({ userId: current.id, username: current.username, ...meta, action: 'update', resource: 'user', resourceId: targetId, detail: JSON.stringify(patch), status: 'failed', reason: 'self-lock-guard' });
         return c.json({ error: '不能降级或禁用当前登录账号' }, 400);
       }
       let updated = false;
       if (patch.role !== undefined) updated = deps.users.updateUserRole(targetId, patch.role);
       if (patch.status !== undefined) updated = deps.users.setUserStatus(targetId, patch.status);
-      if (!updated) return c.json({ error: '用户不存在' }, 404);
+      if (!updated) {
+        audit.operation({ userId: current.id, username: current.username, ...meta, action: 'update', resource: 'user', resourceId: targetId, status: 'failed', reason: 'not-found' });
+        return c.json({ error: '用户不存在' }, 404);
+      }
       const nextUser = deps.users.getById(targetId);
       if (nextUser === undefined) return c.json({ error: '用户不存在' }, 404);
+      audit.operation({ userId: current.id, username: current.username, ...meta, action: 'update', resource: 'user', resourceId: targetId, detail: JSON.stringify(patch), status: 'success' });
       return c.json({ user: nextUser });
     },
   );
 
   app.post('/api/admin/users/:id/reset-password', requirePermission('/admin/users'), async (c) => {
     const targetId = c.req.param('id');
+    const me = actor(c);
+    const meta = requestMeta(c);
     const newPassword = generateRandomPassword();
     if (!deps.users.resetPassword(targetId, await hashPassword(newPassword))) {
+      audit.operation({ ...me, ...meta, action: 'reset_password', resource: 'user', resourceId: targetId, status: 'failed', reason: 'not-found' });
       return c.json({ error: '用户不存在' }, 404);
     }
     // 旧凭据立即失效
     deps.users.deleteSessionsForUser(targetId);
+    audit.operation({ ...me, ...meta, action: 'reset_password', resource: 'user', resourceId: targetId, status: 'success' });
     return c.json({ newPassword });
   });
 
   app.delete('/api/admin/users/:id', requirePermission('/admin/users'), (c) => {
     const targetId = c.req.param('id');
+    const me = actor(c);
+    const meta = requestMeta(c);
     if (targetId === c.get('user').id) {
+      audit.operation({ ...me, ...meta, action: 'delete', resource: 'user', resourceId: targetId, status: 'failed', reason: 'self-delete-guard' });
       return c.json({ error: '不能删除当前登录账号' }, 400);
     }
-    if (!deps.users.deleteUser(targetId)) return c.json({ error: '用户不存在' }, 404);
+    if (!deps.users.deleteUser(targetId)) {
+      audit.operation({ ...me, ...meta, action: 'delete', resource: 'user', resourceId: targetId, status: 'failed', reason: 'not-found' });
+      return c.json({ error: '用户不存在' }, 404);
+    }
+    audit.operation({ ...me, ...meta, action: 'delete', resource: 'user', resourceId: targetId, status: 'success' });
     return c.json({ deleted: true });
   });
+
+  // —— 审计日志查询（登录日志 / 操作日志，独立权限；分页 + 日期/状态/动作/用户名筛选）——
+  app.get(
+    '/api/admin/login-logs',
+    requirePermission('/admin/login-logs'),
+    zValidator('query', LoginLogQuerySchema),
+    (c) => c.json(LoginLogListResponseSchema.parse(audit.listLoginLogs(c.req.valid('query')))),
+  );
+
+  app.get(
+    '/api/admin/operation-logs',
+    requirePermission('/admin/operation-logs'),
+    zValidator('query', OperationLogQuerySchema),
+    (c) =>
+      c.json(OperationLogListResponseSchema.parse(audit.listOperationLogs(c.req.valid('query')))),
+  );
 
   app.get('/api/admin/overview', requirePermission('/admin'), (c) => {
     const stats = deps.store.getStats();

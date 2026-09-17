@@ -1,6 +1,6 @@
-# AI Code Review Agent
+# ReviewFlow
 
-基于 Vibe Coding 工作流的 Git 提交 AI 审查与风险分析系统。在开发者执行 `git commit` 时，系统自动读取暂存区变更，结合确定性静态分析与 LLM Agent，从正确性、安全性、性能和可维护性等维度生成结构化报告，并在代码进入仓库之前完成第一轮质量把关。
+一个 Git 提交 AI 审查与风险分析系统。在开发者执行 `git commit` 时，系统自动读取暂存区变更，结合确定性静态分析与 LLM Agent，从正确性、安全性、性能和可维护性等维度生成结构化报告，并在代码进入仓库之前完成第一轮质量把关。
 
 项目采用全栈 TypeScript 单语言实现（pnpm Monorepo + Turborepo）。`packages/shared` 中的 Zod schema 是配置、API 契约、数据库行类型和前端表单的单一事实源，尽量让契约漂移在编译期被发现。
 
@@ -17,7 +17,7 @@
 - **Web Dashboard**：登录后查看审查历史、五段式报告、diff、行级发现、误报标记、SSE 实时进度和 ECharts 统计分析。
 - **团队权限管理**：首个注册用户自动成为管理员；管理员可以查看全量审查数据、管理用户、编辑配置、维护知识库并查看 Prometheus 指标。
 - **MCP 工具开放**：通过 stdio MCP Server 暴露静态分析工具，可供 Claude Code 等外部 Agent 复用。
-- **可观测性**：提供 `/metrics` Prometheus 指标和 `/api/stats` 统计聚合接口。
+- **可观测性**：提供 `/metrics` Prometheus 指标、`/api/stats` 统计聚合接口，以及登录/操作审计日志（后台页面查询 + 控制台输出 + 按日归档文件）。
 
 ## 系统架构
 
@@ -318,6 +318,15 @@ staticAnalysis:
   enabledTools: [ast_parse, complexity_check, secret_scan, dependency_scan, custom_rule_check]
   complexityThreshold: 15
 
+# 审计日志（登录日志 + 操作日志）：SQLite 落库供后台查询，同时输出控制台并按日滚动归档；
+# 保存后需重启服务生效（基础设施配置，不随审查热重读）
+logging:
+  enabled: true   # 总开关：关闭后不再写入新日志（存量日志仍可查询）
+  console: true   # 输出到控制台（单行可读格式）
+  file: true      # 写文件归档（JSON Lines，按日滚动）
+  dir: logs       # 日志目录：<dir>/ai-review-login-YYYY-MM-DD.log 与 -operation- 同名
+  maxDays: 30     # 超过保留天数的旧日志文件自动清理
+
 # 用户自定义审查规则（管理员在后台维护，随配置生效；匹配范围：added 新增行 / staged 文件全文 / snippet 函数片段）
 # 保存后下一次审查立即生效（服务端热重读，无需重启）；存在启用规则时 custom_rule_check 自动参与，无需在 enabledTools 单独开启。
 # pattern 为正则源码（≤1024 字符），非法表达式在保存/试跑时即被拒绝；规则在审查路径逐行执行，请避免灾难性回溯的正则。
@@ -364,7 +373,7 @@ Ollama 的默认模型回退为 `qwen3-coder:30b`，可用 `AI_REVIEW_OLLAMA_MOD
 - `/api/auth/register` 和 `/api/auth/login` 可匿名访问，其余 `/api` 接口默认要求登录。
 - 首个注册用户自动成为 `admin`；后续注册用户为 `user`。
 - 普通用户只能查看、重新执行、取消、导出和删除自己发起的审查，并只能修改自己审查中的误报标记。
-- 管理员可以查看全量审查数据、修改用户角色和状态、重置密码、删除其他用户、编辑项目配置、重建 RAG 知识库和查看系统指标。
+- 管理员可以查看全量审查数据、修改用户角色和状态、重置密码、删除其他用户、编辑项目配置、重建 RAG 知识库、查看系统指标与登录/操作审计日志。
 - 管理员不能通过后台删除自己或将自己降级/禁用，避免锁死最后的管理入口。
 - 后台重置密码会生成一次性随机密码并立即吊销目标用户的旧会话；请通过安全渠道交付新密码。
 
@@ -397,6 +406,7 @@ Ollama 的默认模型回退为 `qwen3-coder:30b`，可用 `AI_REVIEW_OLLAMA_MOD
 3. **配置管理**：读取并保存 `.ai-review.yml`；API Key 在页面中以 `********` 掩码显示，提交掩码值会保留原密钥。
 4. **自定义规则**：查看、新增、编辑、删除和启停自定义审查规则，并可粘贴示例 diff / 源码在线试跑验证正则命中。
 5. **知识库管理**：查看索引状态并异步触发 RAG 增量重建。
+6. **登录日志 / 操作日志**：分页查看认证事件与管理/审查写操作审计，支持日期范围、状态、动作与关键词筛选（仅持有对应权限的账号可见）。
 
 ## HTTP API
 
@@ -444,6 +454,8 @@ Ollama 的默认模型回退为 `qwen3-coder:30b`，可用 `AI_REVIEW_OLLAMA_MOD
 | `/api/admin/rules`                    | GET    | 自定义审查规则列表                            |
 | `/api/admin/rules`                    | PUT    | 整体保存自定义审查规则（随配置持久化）        |
 | `/api/admin/rules/test`               | POST   | 试跑规则：`{ rule, sampleDiffText?, sampleSource? }` 返回命中行 |
+| `/api/admin/login-logs`               | GET    | 登录日志（分页 + 日期/状态/动作/用户名筛选；权限 `/admin/login-logs`） |
+| `/api/admin/operation-logs`           | GET    | 操作日志（分页 + 日期/状态/动作/资源筛选；权限 `/admin/operation-logs`） |
 | `/metrics`                            | GET    | Prometheus 文本格式指标                       |
 
 SSE 事件通过 `event` + JSON `data` 发送：
@@ -535,8 +547,3 @@ pnpm format      # Prettier --write（会修改文件）
 | Dashboard 请求 401/403                  | 先登录；普通用户不能访问 `/api/admin/*` 或 `/metrics`，被禁用用户需要管理员恢复状态                         |
 | 前端打开但 API 请求失败                 | 开发环境确认 server 在 8080；生产环境使用 `--web-dist apps/web/dist`，不要把 Vite 开发代理配置当作生产代理  |
 | Docker 重建后数据看似丢失               | 确认使用 `docker compose up`，不要删除 `review-data` volume；检查 `/app/.ai-review-cache` 挂载状态          |
-
-## 文档
-
-- [项目实现方案](docs/项目实现方案.md) —— 系统架构、核心模块设计与选型论证
-- [代码编写规范](docs/代码编写规范.md) —— 全仓编码约束与工具链落地

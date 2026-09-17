@@ -15,6 +15,7 @@
     "@tanstack/react-query": "catalog:",
     "@tanstack/react-router": "catalog:",
     "antd": "catalog:",
+    "dayjs": "catalog:",
     "echarts": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:",

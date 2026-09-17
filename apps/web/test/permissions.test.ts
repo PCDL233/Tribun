@@ -34,6 +34,17 @@ describe('canAccessPath', () => {
     expect(canAccessPath(['/admin/rules'], '/admin')).toBe(false);
   });
 
+  it('登录日志/操作日志页需各自独立授权', () => {
+    expect(canAccessPath(['/admin/login-logs'], '/admin/login-logs')).toBe(true);
+    expect(canAccessPath(['/admin/operation-logs'], '/admin/operation-logs')).toBe(true);
+    // 仅持有其中一个日志权限时，另一个不可访问
+    expect(canAccessPath(['/admin/login-logs'], '/admin/operation-logs')).toBe(false);
+    expect(canAccessPath(['/admin/operation-logs'], '/admin/login-logs')).toBe(false);
+    // admin 角色（'*'）恒可访问
+    expect(canAccessPath(['*'], '/admin/login-logs')).toBe(true);
+    expect(canAccessPath(['*'], '/admin/operation-logs')).toBe(true);
+  });
+
   it("'*' 恒允许访问任意路径", () => {
     expect(canAccessPath(['*'], '/reviews/abc123')).toBe(true);
     expect(canAccessPath(['*'], '/admin/users')).toBe(true);

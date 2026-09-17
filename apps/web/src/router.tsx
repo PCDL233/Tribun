@@ -42,6 +42,12 @@ const AdminConfigPage = lazy(() =>
 const AdminRulesPage = lazy(() =>
   import('./pages/admin/AdminRulesPage').then((m) => ({ default: m.AdminRulesPage })),
 );
+const AdminLoginLogsPage = lazy(() =>
+  import('./pages/admin/AdminLogsPage').then((m) => ({ default: m.AdminLoginLogsPage })),
+);
+const AdminOperationLogsPage = lazy(() =>
+  import('./pages/admin/AdminLogsPage').then((m) => ({ default: m.AdminOperationLogsPage })),
+);
 const AdminAiConfigPage = lazy(() =>
   import('./pages/admin/AdminAiConfigPage').then((m) => ({ default: m.AdminAiConfigPage })),
 );
@@ -261,6 +267,18 @@ const adminRulesRoute = createRoute({
   component: AdminRulesPage,
 });
 
+const adminLoginLogsRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/login-logs',
+  component: AdminLoginLogsPage,
+});
+
+const adminOperationLogsRoute = createRoute({
+  getParentRoute: () => adminRoute,
+  path: '/operation-logs',
+  component: AdminOperationLogsPage,
+});
+
 const adminAiConfigRoute = createRoute({
   getParentRoute: () => adminRoute,
   path: '/ai',
@@ -339,6 +357,8 @@ export const routeTree = rootRoute.addChildren([
     adminRolesRoute,
     adminConfigRoute,
     adminRulesRoute,
+    adminLoginLogsRoute,
+    adminOperationLogsRoute,
     adminAiConfigRoute,
     adminToolsRoute,
     adminInitRoute,

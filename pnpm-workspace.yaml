@@ -48,6 +48,7 @@ catalog:
   '@tanstack/react-query': ^5.102.8
   '@tanstack/react-router': ^1.120.0
   antd: ^6.6.3
+  dayjs: ^1.11.13
   oxc-transform-react: ^0.149.0
   # 统计分析图表（方案 3.10 页面 4，echarts/core 按需注册控制体积）
   echarts: ^6.0.0

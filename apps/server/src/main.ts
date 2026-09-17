@@ -3,7 +3,7 @@ import { delimiter, dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { serve } from '@hono/node-server';
 import { serveStatic } from '@hono/node-server/serve-static';
-import { openSqlite, ReviewStore, UserStore } from '@ai-review/db';
+import { LogStore, openSqlite, ReviewStore, UserStore } from '@ai-review/db';
 import { createFileHistory, createGitRunner, createIgnoreRules, GitReader } from '@ai-review/diff';
 import { TokenBudget, createConfiguredProviders } from '@ai-review/llm';
 import { runReviewPipeline } from '@ai-review/core';
@@ -11,9 +11,11 @@ import type { PipelineDeps } from '@ai-review/core';
 import { AiReviewConfigSchema, loadConfig } from '@ai-review/shared';
 import type { AiReviewConfig } from '@ai-review/shared';
 import { buildDefaultRegistry, resolveEnabledTools } from '@ai-review/tools';
+import { AuditService } from './audit.js';
 import { AvatarStore } from './avatar.js';
 import { buildApp } from './app.js';
 import { createStoreReviewCache } from './cache.js';
+import { Logger } from './logger.js';
 import { createReviewMetrics } from './metrics.js';
 import { ReviewService } from './review-service.js';
 import { createKnowledgeManager } from './knowledge.js';
@@ -109,6 +111,18 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
   const sqlite = openSqlite(options.dbFile);
   const store = new ReviewStore(sqlite);
   const users = new UserStore(sqlite);
+  // 审计日志：SQLite 落库（页面查询）+ Logger（控制台 + 按日文件归档），配置项总开关
+  const logs = new LogStore(sqlite);
+  const audit = new AuditService(
+    logs,
+    new Logger({
+      console: config.logging.console,
+      file: config.logging.file,
+      dir: config.logging.dir,
+      maxDays: config.logging.maxDays,
+    }),
+    config.logging.enabled,
+  );
   // 存量迁移：为 RBAC 引入前创建、尚无角色分配的账号补发内置角色（admin→role-admin 等）
   users.backfillDefaultRoles();
   const metrics = createReviewMetrics();
@@ -137,6 +151,7 @@ export async function startServer(options: ServerCliOptions): Promise<void> {
     configPath,
     knowledge,
     avatars: avatarStore,
+    audit,
     // 允许审查的仓库根目录（方案 3）：默认当前工作目录；可用 AI_REVIEW_ALLOWED_ROOTS 以路径分隔符扩展
     allowedRoots:
       process.env.AI_REVIEW_ALLOWED_ROOTS?.split(delimiter).filter((p) => p !== '') ?? [

@@ -7,6 +7,8 @@ import {
   AssignRolesSchema,
   CustomRuleTestRequestSchema,
   CustomRuleTestResultSchema,
+  LoginLogListResponseSchema,
+  OperationLogListResponseSchema,
   ResetPasswordResponseSchema,
   RoleInputSchema,
   RoleListResponseSchema,
@@ -20,6 +22,10 @@ import type {
   CustomRule,
   CustomRuleTestRequest,
   CustomRuleTestResult,
+  LoginLogListResponse,
+  LoginLogQuery,
+  OperationLogListResponse,
+  OperationLogQuery,
   Role,
   RoleInput,
   User,
@@ -162,4 +168,33 @@ export async function testCustomRule(request: CustomRuleTestRequest): Promise<Cu
     body: JSON.stringify(payload),
   });
   return parseResponse(CustomRuleTestResultSchema, response);
+}
+
+/** 组装查询字符串（省略未定义的筛选字段） */
+function toQueryString(query: Record<string, string | number | undefined>): string {
+  const params = new URLSearchParams();
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined) params.set(key, String(value));
+  }
+  return params.toString();
+}
+
+/** 登录日志分页查询（管理后台） */
+export async function fetchLoginLogs(query: LoginLogQuery): Promise<LoginLogListResponse> {
+  const body = await parseResponse(
+    LoginLogListResponseSchema,
+    await fetch(`${API_BASE}/login-logs?${toQueryString(query)}`),
+  );
+  return body;
+}
+
+/** 操作日志分页查询（管理后台） */
+export async function fetchOperationLogs(
+  query: OperationLogQuery,
+): Promise<OperationLogListResponse> {
+  const body = await parseResponse(
+    OperationLogListResponseSchema,
+    await fetch(`${API_BASE}/operation-logs?${toQueryString(query)}`),
+  );
+  return body;
 }

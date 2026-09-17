@@ -253,3 +253,118 @@ export const CustomRuleTestResultSchema = z.object({
   ),
 });
 export type CustomRuleTestResult = z.infer<typeof CustomRuleTestResultSchema>;
+
+/** —— 审计日志（登录日志 + 操作日志，参照云审计事件字段规范）—— */
+
+/** 登录/认证事件动作（登录日志） */
+export const LOGIN_LOG_ACTIONS = ['login', 'logout', 'register', 'change_password'] as const;
+export type LoginLogAction = (typeof LOGIN_LOG_ACTIONS)[number];
+
+/** 登录日志行（登录日志页数据源） */
+export const LoginLogSchema = z.object({
+  id: z.number().int().positive(),
+  /** 操作用户 id；登录失败（用户不存在）时为 null */
+  userId: z.string().nullable(),
+  /** 尝试登录的用户名（失败登录同样记录，供安全分析） */
+  username: z.string(),
+  action: z.enum(LOGIN_LOG_ACTIONS),
+  status: z.enum(['success', 'failed']),
+  /** 失败原因（如 invalid-credentials / account-disabled）；成功为 null */
+  reason: z.string().nullable(),
+  /** 来源 IP（复用限流模块的客户端 IP 判定） */
+  ip: z.string(),
+  /** 客户端 User-Agent；无则空串 */
+  userAgent: z.string(),
+  createdAt: z.string(),
+});
+export type LoginLog = z.infer<typeof LoginLogSchema>;
+
+/** 操作日志动作（资源上的 create/update/delete 等） */
+export const OPERATION_LOG_ACTIONS = [
+  'create',
+  'update',
+  'delete',
+  'login',
+  'logout',
+  'register',
+  'change_password',
+  'reset_password',
+  'assign_roles',
+  'start_review',
+  'rerun_review',
+  'cancel_review',
+  'delete_review',
+  'mark_false_positive',
+  'save_config',
+  'save_rules',
+  'test_rules',
+  'reindex_knowledge',
+] as const;
+export type OperationLogAction = (typeof OPERATION_LOG_ACTIONS)[number];
+
+/** 操作日志行（操作日志页数据源） */
+export const OperationLogSchema = z.object({
+  id: z.number().int().positive(),
+  /** 操作者用户 id；匿名请求（如登录失败）为 null */
+  userId: z.string().nullable(),
+  username: z.string(),
+  action: z.enum(OPERATION_LOG_ACTIONS),
+  /** 资源类型（user / role / config / rules / review / finding / knowledge / auth） */
+  resource: z.string(),
+  /** 目标资源 id（如用户 id、审查 id）；无则空串 */
+  resourceId: z.string(),
+  /** 操作摘要（JSON 字符串，如 patch 内容）；不记录密码/令牌等敏感字段 */
+  detail: z.string(),
+  status: z.enum(['success', 'failed']),
+  reason: z.string().nullable(),
+  ip: z.string(),
+  userAgent: z.string(),
+  createdAt: z.string(),
+});
+export type OperationLog = z.infer<typeof OperationLogSchema>;
+
+/** 登录日志查询参数（GET /api/admin/login-logs，分页 + 日期/状态/动作/用户名筛选） */
+export const LoginLogQuerySchema = z.object({
+  /** 关键词：模糊匹配用户名 */
+  q: z.string().trim().min(1).optional(),
+  status: z.enum(['success', 'failed']).optional(),
+  action: z.enum(LOGIN_LOG_ACTIONS).optional(),
+  /** 日期范围（YYYY-MM-DD，按 UTC 自然日闭区间） */
+  from: z.string().trim().min(1).optional(),
+  to: z.string().trim().min(1).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type LoginLogQuery = z.infer<typeof LoginLogQuerySchema>;
+
+/** 操作日志查询参数（GET /api/admin/operation-logs） */
+export const OperationLogQuerySchema = z.object({
+  /** 关键词：模糊匹配用户名 / 资源类型 / 目标 id */
+  q: z.string().trim().min(1).optional(),
+  action: z.enum(OPERATION_LOG_ACTIONS).optional(),
+  resource: z.string().trim().min(1).optional(),
+  status: z.enum(['success', 'failed']).optional(),
+  from: z.string().trim().min(1).optional(),
+  to: z.string().trim().min(1).optional(),
+  page: z.coerce.number().int().min(1).default(1),
+  pageSize: z.coerce.number().int().min(1).max(100).default(20),
+});
+export type OperationLogQuery = z.infer<typeof OperationLogQuerySchema>;
+
+/** GET /api/admin/login-logs 响应体 */
+export const LoginLogListResponseSchema = z.object({
+  logs: z.array(LoginLogSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+});
+export type LoginLogListResponse = z.infer<typeof LoginLogListResponseSchema>;
+
+/** GET /api/admin/operation-logs 响应体 */
+export const OperationLogListResponseSchema = z.object({
+  logs: z.array(OperationLogSchema),
+  total: z.number().int().nonnegative(),
+  page: z.number().int().positive(),
+  pageSize: z.number().int().positive(),
+});
+export type OperationLogListResponse = z.infer<typeof OperationLogListResponseSchema>;

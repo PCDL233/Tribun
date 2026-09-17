@@ -4,14 +4,16 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { runReviewPipeline } from '@ai-review/core';
 import type { GitRunner, PipelineDeps, PipelineRunner, ReviewState } from '@ai-review/core';
-import { openSqlite, ReviewStore, UserStore } from '@ai-review/db';
+import { openSqlite, LogStore, ReviewStore, UserStore } from '@ai-review/db';
 import { GitReader } from '@ai-review/diff';
 import { createMockProvider } from '@ai-review/llm';
 import { buildDefaultRegistry } from '@ai-review/tools';
 import type { Finding } from '@ai-review/shared';
 import { buildApp } from '../src/app.js';
+import { AuditService } from '../src/audit.js';
 import { AvatarStore } from '../src/avatar.js';
 import { createStoreReviewCache } from '../src/cache.js';
+import { Logger } from '../src/logger.js';
 import { createReviewMetrics } from '../src/metrics.js';
 import { ReviewService } from '../src/review-service.js';
 
@@ -79,6 +81,34 @@ function makeGatedRunner(gate: { promise: Promise<void>; resolve: () => void }):
 }
 
 type Harness = ReturnType<typeof buildApp>;
+
+/** 装配审计日志（SQLite 落库，Logger 静默）；返回 app 与 AuditService 供断言 */
+function makeAuditedHarness(
+  runner: PipelineRunner,
+  configPath?: string,
+): { app: Harness; audit: AuditService } {
+  const sqlite = openSqlite(':memory:');
+  const store = new ReviewStore(sqlite);
+  const users = new UserStore(sqlite);
+  const metrics = createReviewMetrics();
+  const service = new ReviewService(store, makeDeps, runner, metrics);
+  const audit = new AuditService(
+    new LogStore(sqlite),
+    new Logger({ console: false, file: false }),
+    true,
+  );
+  const app = buildApp({
+    store,
+    users,
+    service,
+    metrics,
+    audit,
+    ...(configPath === undefined ? {} : { configPath }),
+    registrationOpen: true,
+    allowedRoots: ['D:/'],
+  });
+  return { app, audit };
+}
 
 function makeHarness(runner: PipelineRunner, avatars?: AvatarStore, configPath?: string): Harness {
   const sqlite = openSqlite(':memory:');
@@ -1368,5 +1398,130 @@ describe('hardening: queued review cancellation', () => {
       const detail = await app.request(`/api/reviews/${firstId}`, { headers: auth(cookie) });
       expect(detail.status).toBe(200);
     });
+  });
+});
+
+describe('审计日志（登录日志 + 操作日志）', () => {
+  it('records login success and failure with reasons into login logs', async () => {
+    const { app } = makeAuditedHarness(async () => makeState());
+    const admin = await registerUser(app, 'boss');
+
+    // 登录成功
+    const ok = await app.request('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'boss', password: 'password123' }),
+    });
+    expect(ok.status).toBe(200);
+
+    // 登录失败（错误密码）—— 审计必记，含原因与 IP
+    const bad = await app.request('/api/auth/login', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ username: 'boss', password: 'wrong-password' }),
+    });
+    expect(bad.status).toBe(401);
+
+    // 失败筛选
+    const failedRes = await app.request('/api/admin/login-logs?status=failed', {
+      headers: auth(admin.cookie),
+    });
+    expect(failedRes.status).toBe(200);
+    const failedBody = (await failedRes.json()) as {
+      logs: Array<{ username: string; action: string; status: string; reason: string; ip: string }>;
+      total: number;
+    };
+    expect(failedBody.total).toBe(1);
+    expect(failedBody.logs[0]).toMatchObject({
+      username: 'boss',
+      action: 'login',
+      status: 'failed',
+      reason: 'invalid-password',
+    });
+    expect(failedBody.logs[0]?.ip).toBeTruthy();
+
+    // 全部登录日志：register + login 成功 + login 失败
+    const allRes = await app.request('/api/admin/login-logs', { headers: auth(admin.cookie) });
+    const allBody = (await allRes.json()) as { total: number };
+    expect(allBody.total).toBe(3);
+  });
+
+  it('records admin writes and review operations into operation logs', async () => {
+    const { app } = makeAuditedHarness(async () => makeState());
+    const admin = await registerUser(app, 'boss');
+
+    // 管理员创建用户
+    const created = await app.request('/api/admin/users', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...auth(admin.cookie) },
+      body: JSON.stringify({ username: 'carol', password: 'password123' }),
+    });
+    expect(created.status).toBe(201);
+
+    // 发起审查（handler 同步落审计，无需等待流水线完成）
+    const reviewId = await startReview(app, admin.cookie);
+
+    const res = await app.request('/api/admin/operation-logs?pageSize=50', {
+      headers: auth(admin.cookie),
+    });
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as {
+      logs: Array<{
+        action: string;
+        resource: string;
+        resourceId: string;
+        detail: string;
+        username: string;
+      }>;
+      total: number;
+    };
+    // boss 注册 + carol 创建 + 发起审查
+    expect(body.total).toBe(3);
+    expect(
+      body.logs.some(
+        (log) => log.action === 'create' && log.resource === 'user' && log.detail.includes('carol'),
+      ),
+    ).toBe(true);
+    expect(
+      body.logs.some((log) => log.action === 'start_review' && log.resourceId === reviewId),
+    ).toBe(true);
+  });
+
+  it('paginates and filters operation logs', async () => {
+    const { app } = makeAuditedHarness(async () => makeState());
+    const admin = await registerUser(app, 'boss');
+    for (const name of ['user1', 'user2', 'user3']) await registerUser(app, name);
+
+    const page1 = await app.request('/api/admin/operation-logs?page=1&pageSize=2', {
+      headers: auth(admin.cookie),
+    });
+    const page1Body = (await page1.json()) as { logs: unknown[]; total: number; page: number };
+    expect(page1Body.total).toBe(4); // 4 次注册
+    expect(page1Body.logs).toHaveLength(2);
+    expect(page1Body.page).toBe(1);
+
+    const page2 = await app.request('/api/admin/operation-logs?page=2&pageSize=2', {
+      headers: auth(admin.cookie),
+    });
+    const page2Body = (await page2.json()) as { logs: unknown[]; page: number };
+    expect(page2Body.logs).toHaveLength(2);
+    expect(page2Body.page).toBe(2);
+
+    const byAction = await app.request('/api/admin/operation-logs?action=register', {
+      headers: auth(admin.cookie),
+    });
+    const byActionBody = (await byAction.json()) as { total: number };
+    expect(byActionBody.total).toBe(4);
+  });
+
+  it('restricts log pages to admins with the matching permission', async () => {
+    const { app } = makeAuditedHarness(async () => makeState());
+    await registerUser(app, 'boss');
+    // 普通用户无 /admin/login-logs 权限
+    const alice = await registerUser(app, 'alice');
+    const res = await app.request('/api/admin/login-logs', { headers: auth(alice.cookie) });
+    expect(res.status).toBe(403);
+    const resOp = await app.request('/api/admin/operation-logs', { headers: auth(alice.cookie) });
+    expect(resOp.status).toBe(403);
   });
 });

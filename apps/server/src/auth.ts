@@ -11,8 +11,9 @@ import {
   LoginSchema,
   RegisterSchema,
 } from '@ai-review/shared';
-import { createRateLimiter } from './rate-limit.js';
+import { createRateLimiter, getClientIp } from './rate-limit.js';
 import type { AppEnv } from './app.js';
+import type { AuditService } from './audit.js';
 
 const scrypt = promisify(scryptCallback);
 
@@ -52,6 +53,8 @@ export interface AuthDeps {
   users: UserStore;
   /** 是否允许开放注册（方案 8）；缺省：已存在用户时关闭，需管理员在后台创建 */
   registrationOpen?: boolean;
+  /** 审计日志（登录日志 + 操作日志）；未装配时静默跳过 */
+  audit?: AuditService;
 }
 
 /** requireAuth 中间件工厂：校验 Cookie 会话，通过后把 SafeUser 写入 Context 变量 */
@@ -153,12 +156,17 @@ export function registerAuthRoutes(app: Hono<AppEnv>, deps: AuthDeps): void {
 
   app.post('/api/auth/register', authLimiter, zValidator('json', RegisterSchema), async (c) => {
     const { username, password } = c.req.valid('json');
+    const ip = getClientIp(c);
+    const userAgent = c.req.header('user-agent') ?? '';
+    const audit = deps.audit;
     // 开放注册（方案 8）：显式配置优先；缺省为“首个管理员引导后关闭”
     const openRegistration =
       deps.registrationOpen !== undefined
         ? deps.registrationOpen
         : process.env.AI_REVIEW_ALLOW_REGISTER === 'true' || deps.users.countUsers() === 0;
     if (!openRegistration) {
+      audit?.login({ username, action: 'register', status: 'failed', reason: 'registration-closed', ip, userAgent });
+      audit?.operation({ username, action: 'register', resource: 'auth', status: 'failed', reason: 'registration-closed', ip, userAgent });
       return c.json(
         { error: '注册已关闭，请联系管理员开通账号' },
         403,
@@ -168,15 +176,24 @@ export function registerAuthRoutes(app: Hono<AppEnv>, deps: AuthDeps): void {
     try {
       user = deps.users.createUser({ username, passwordHash: await hashPassword(password) });
     } catch (e) {
-      if (e instanceof StoreError) return c.json({ error: e.message }, 409);
+      if (e instanceof StoreError) {
+        audit?.login({ username, action: 'register', status: 'failed', reason: 'username-exists', ip, userAgent });
+        audit?.operation({ username, action: 'register', resource: 'auth', status: 'failed', reason: 'username-exists', ip, userAgent });
+        return c.json({ error: e.message }, 409);
+      }
       throw e;
     }
+    audit?.login({ userId: user.id, username, action: 'register', status: 'success', ip, userAgent });
+    audit?.operation({ userId: user.id, username, action: 'register', resource: 'auth', status: 'success', ip, userAgent });
     issueSessionCookie(deps, c, user.id);
     return c.json(AuthResponseSchema.parse({ user }), 201);
   });
 
   app.post('/api/auth/login', authLimiter, zValidator('json', LoginSchema), async (c) => {
     const { username, password } = c.req.valid('json');
+    const ip = getClientIp(c);
+    const userAgent = c.req.header('user-agent') ?? '';
+    const audit = deps.audit;
     const user = deps.users.getByUsername(username);
     // 用户不存在与密码错误统一口径，避免枚举有效用户名；
     // 无论用户是否存在都无条件执行一次等代价 scrypt 校验（方案 7 恒时化）——
@@ -188,20 +205,35 @@ export function registerAuthRoutes(app: Hono<AppEnv>, deps: AuthDeps): void {
         : (deps.users.getPasswordHash(user.id) ?? (await getDummyHash()));
     const passwordOk = await verifyPassword(password, storedHash);
     if (user === undefined || !passwordOk) {
+      // 失败登录同样入库（安全审计）：内部记录精确原因供分析，对外统一提示不泄露用户名
+      const reason = user === undefined ? 'user-not-found' : 'invalid-password';
+      audit?.login({ userId: user?.id ?? null, username, action: 'login', status: 'failed', reason, ip, userAgent });
+      audit?.operation({ userId: user?.id ?? null, username, action: 'login', resource: 'auth', status: 'failed', reason, ip, userAgent });
       return c.json({ error: '用户名或密码错误' }, 401);
     }
     if (user.status === 'disabled') {
+      audit?.login({ userId: user.id, username, action: 'login', status: 'failed', reason: 'account-disabled', ip, userAgent });
+      audit?.operation({ userId: user.id, username, action: 'login', resource: 'auth', status: 'failed', reason: 'account-disabled', ip, userAgent });
       return c.json({ error: '账号已被禁用' }, 403);
     }
     issueSessionCookie(deps, c, user.id);
     deps.users.touchLastLogin(user.id);
+    audit?.login({ userId: user.id, username, action: 'login', status: 'success', ip, userAgent });
+    audit?.operation({ userId: user.id, username, action: 'login', resource: 'auth', status: 'success', ip, userAgent });
     return c.json(AuthResponseSchema.parse({ user }));
   });
 
   app.post('/api/auth/logout', (c) => {
+    const ip = getClientIp(c);
+    const userAgent = c.req.header('user-agent') ?? '';
+    // logout 无条件生效；为审计日志在删除会话前解析出用户（匿名时记 unknown）
     const token = getCookie(c, SESSION_COOKIE);
+    const user = token === undefined || token === '' ? undefined : deps.users.getSessionUser(token);
     if (token !== undefined) deps.users.deleteSession(token);
     deleteCookie(c, SESSION_COOKIE, { path: '/' });
+    const username = user?.username ?? 'unknown';
+    deps.audit?.login({ userId: user?.id ?? null, username, action: 'logout', status: 'success', ip, userAgent });
+    deps.audit?.operation({ userId: user?.id ?? null, username, action: 'logout', resource: 'auth', status: 'success', ip, userAgent });
     return c.json({ loggedOut: true });
   });
 
@@ -216,14 +248,21 @@ export function registerAuthRoutes(app: Hono<AppEnv>, deps: AuthDeps): void {
     async (c) => {
       const user = c.get('user');
       const { oldPassword, newPassword } = c.req.valid('json');
+      const ip = getClientIp(c);
+      const userAgent = c.req.header('user-agent') ?? '';
+      const audit = deps.audit;
       const storedHash = deps.users.getPasswordHash(user.id);
       if (storedHash === undefined || !(await verifyPassword(oldPassword, storedHash))) {
+        audit?.login({ userId: user.id, username: user.username, action: 'change_password', status: 'failed', reason: 'invalid-old-password', ip, userAgent });
+        audit?.operation({ userId: user.id, username: user.username, action: 'change_password', resource: 'auth', status: 'failed', reason: 'invalid-old-password', ip, userAgent });
         return c.json({ error: '当前密码不正确' }, 400);
       }
       deps.users.resetPassword(user.id, await hashPassword(newPassword));
       // 旧密码可能已泄露：改密后吊销全部会话，强制所有端重新登录
       deps.users.deleteSessionsForUser(user.id);
       deleteCookie(c, SESSION_COOKIE, { path: '/' });
+      audit?.login({ userId: user.id, username: user.username, action: 'change_password', status: 'success', ip, userAgent });
+      audit?.operation({ userId: user.id, username: user.username, action: 'change_password', resource: 'auth', status: 'success', ip, userAgent });
       return c.json({ changed: true });
     },
   );

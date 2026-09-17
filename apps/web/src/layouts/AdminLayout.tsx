@@ -1,25 +1,11 @@
 import { Outlet, useLocation, useNavigate } from '@tanstack/react-router';
 import type { ReactElement } from 'react';
-import {
-  AppstoreOutlined,
-  ArrowLeftOutlined,
-  BookOutlined,
-  BugOutlined,
-  FileAddOutlined,
-  FileTextOutlined,
-  MoonOutlined,
-  RobotOutlined,
-  SafetyCertificateOutlined,
-  SettingOutlined,
-  SunOutlined,
-  TeamOutlined,
-  ToolOutlined,
-  UnorderedListOutlined,
-} from '@ant-design/icons';
+import { ArrowLeftOutlined, MoonOutlined, SunOutlined } from '@ant-design/icons';
 import { Button, Layout, Menu, Space, Typography } from 'antd';
+import type { ItemType } from 'antd/es/menu/interface';
 import { BrandMark } from '../components/Brand';
 import { useAuth } from '../hooks/use-auth';
-import { canAccessPath } from '../permissions';
+import { adminGroupKeyOf, buildAdminMenu, isAdminMenuGroup } from '../admin-menu';
 import { useTheme } from '../theme-context';
 
 function pageTitle(pathname: string): string {
@@ -30,6 +16,10 @@ function pageTitle(pathname: string): string {
       return '角色管理';
     case '/admin/rules':
       return '自定义审查规则';
+    case '/admin/login-logs':
+      return '登录日志';
+    case '/admin/operation-logs':
+      return '操作日志';
     case '/admin/ai':
       return 'AI 模型配置';
     case '/admin/config':
@@ -54,39 +44,31 @@ export function AdminLayout(): ReactElement {
   const location = useLocation();
   const { mode, toggle } = useTheme();
   const { user } = useAuth();
-  const can = (path: string): boolean => canAccessPath(user?.permissions ?? [], path);
 
-  const adminMenuItems = [
-    ...(can('/admin') ? [{ key: '/admin', label: '系统概览', icon: <AppstoreOutlined /> }] : []),
-    ...(can('/admin/users')
-      ? [{ key: '/admin/users', label: '用户管理', icon: <TeamOutlined /> }]
-      : []),
-    ...(can('/admin/roles')
-      ? [{ key: '/admin/roles', label: '角色管理', icon: <SafetyCertificateOutlined /> }]
-      : []),
-    ...(can('/admin/ai') ? [{ key: '/admin/ai', label: 'AI 模型', icon: <RobotOutlined /> }] : []),
-    ...(can('/admin/config')
-      ? [{ key: '/admin/config', label: '系统配置', icon: <SettingOutlined /> }]
-      : []),
-    ...(can('/admin/rules')
-      ? [{ key: '/admin/rules', label: '自定义规则', icon: <UnorderedListOutlined /> }]
-      : []),
-    ...(can('/admin/knowledge')
-      ? [{ key: '/admin/knowledge', label: '知识库', icon: <BookOutlined /> }]
-      : []),
-    ...(can('/admin/tools')
-      ? [{ key: '/admin/tools', label: '分析工具', icon: <ToolOutlined /> }]
-      : []),
-    ...(can('/admin/init')
-      ? [{ key: '/admin/init', label: '配置初始化', icon: <FileAddOutlined /> }]
-      : []),
-    ...(can('/admin/hook')
-      ? [{ key: '/admin/hook', label: 'Hook 安装', icon: <BugOutlined /> }]
-      : []),
-    ...(can('/admin/metrics')
-      ? [{ key: '/admin/metrics', label: '系统指标', icon: <FileTextOutlined /> }]
-      : []),
-  ];
+  // 分组导航：平铺项（概览/指标）+ 可折叠分组（子项为二级菜单）
+  const menu = buildAdminMenu(user?.permissions ?? []);
+  const menuItems: ItemType[] = menu.map((entry) =>
+    isAdminMenuGroup(entry)
+      ? {
+          key: entry.key,
+          label: entry.label,
+          icon: entry.icon,
+          children: entry.children.map((child) => ({
+            key: child.key,
+            label: child.label,
+            icon: child.icon,
+          })),
+        }
+      : { key: entry.key, label: entry.label, icon: entry.icon },
+  );
+  // 可导航叶子路由（分组 key 以 group: 开头，点击仅展开/收起，不导航）
+  const leafKeys = new Set<string>(
+    menu.flatMap((entry) =>
+      isAdminMenuGroup(entry) ? entry.children.map((child) => child.key) : [entry.key],
+    ),
+  );
+  const groupKey = adminGroupKeyOf(location.pathname);
+  const defaultOpenKeys = groupKey === null ? [] : [groupKey];
 
   return (
     <Layout className="app-shell">
@@ -109,9 +91,13 @@ export function AdminLayout(): ReactElement {
           className="app-menu"
           theme="light"
           mode="inline"
-          items={adminMenuItems}
+          items={menuItems}
           selectedKeys={[location.pathname]}
-          onClick={({ key }) => void navigate({ to: key })}
+          defaultOpenKeys={defaultOpenKeys}
+          onClick={({ key }) => {
+            // 仅叶子路由导航；分组 key 点击只展开/收起
+            if (typeof key === 'string' && leafKeys.has(key)) void navigate({ to: key });
+          }}
         />
         <div className="app-sidebar-footer">
           <Button

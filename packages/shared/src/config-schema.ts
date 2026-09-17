@@ -100,6 +100,24 @@ export const AiReviewConfigSchema = z.object({
       includePraise: z.boolean().default(true),
     })
     .prefault({}),
+  /**
+   * 审计日志配置（登录日志 + 操作日志）。
+   * 日志同时写 SQLite（后台页面查询）与按日滚动的 JSON Lines 文件（运维归档），并输出到控制台。
+   */
+  logging: z
+    .object({
+      /** 总开关；关闭后不再写入新日志（存量日志仍可查询） */
+      enabled: z.boolean().default(true),
+      /** 是否输出到控制台（stdout） */
+      console: z.boolean().default(true),
+      /** 是否写文件归档 */
+      file: z.boolean().default(true),
+      /** 日志文件目录（按日滚动：<dir>/ai-review-YYYY-MM-DD.log） */
+      dir: z.string().default('logs'),
+      /** 日志文件保留天数；超过自动清理 */
+      maxDays: z.number().int().min(1).max(3650).default(30),
+    })
+    .prefault({}),
 });
 
 export type AiReviewConfig = z.infer<typeof AiReviewConfigSchema>;

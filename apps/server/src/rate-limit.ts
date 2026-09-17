@@ -24,13 +24,13 @@ export interface RateLimitOptions {
 }
 
 /**
- * 从请求提取客户端 IP。
+ * 从请求提取客户端 IP（限流与审计日志共用）。
  * - 默认优先底层 socket 地址（不可伪造），回退 x-forwarded-for 首个值
  * - AI_REVIEW_TRUST_PROXY=true 时反转优先级：反向代理（nginx 等）后面
  *   所有请求的 socket 地址都是代理 IP，须改用 XFF；此时取「最后一个」值——
  *   单层代理会把真实客户端 IP 追加在末尾，首值可被客户端伪造
  */
-function getClientIp(c: Context): string {
+export function getClientIp(c: Context): string {
   const trustProxy = process.env.AI_REVIEW_TRUST_PROXY === 'true';
   if (trustProxy) {
     const forwarded = c.req.header('x-forwarded-for');
